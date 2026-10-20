@@ -1,11 +1,13 @@
 import SwiftUI
 import OpenAccsCore
 
-/// One account: who, how much is used, when it resets. Click opens or switches.
+/// One account: who, how much is left, when it comes back. Click opens or switches.
 struct AccountRow: View {
     let row: PanelRow
     let model: any PanelModel
     let now: Date
+    /// Scrolls the list so this whole row shows, with the question it just opened.
+    let reveal: () -> Void
     /// Opens the add flow for this provider again (expired login or key).
     let signIn: (Provider) -> Void
 
@@ -22,52 +24,60 @@ struct AccountRow: View {
 
     enum Confirm { case switchCodex, remove }
 
-
     private var color: Color { AccountColor.color(row.color) }
     private var meters: [UsageWindow] { UsageText.meters(row.usage) }
+    private var staleNote: String? { row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
+
+    /// Meters and captions start under the label, not under the dot.
+    static let indent: CGFloat = 18
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             header
             if !meters.isEmpty {
-                VStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 5) {
                     ForEach(meters, id: \.kind) { Meter(window: $0, now: now) }
                 }
                 .padding(.leading, Self.indent)
+                // Old numbers fade, so nobody picks an account on a guess.
+                .opacity(staleNote == nil ? 1 : 0.5)
+                .allowsHitTesting(false)
             }
             caption.padding(.leading, Self.indent)
             if let confirm {
                 confirmation(confirm)
                     .padding(.leading, Self.indent)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .padding(.top, 2)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.primary.opacity(hovering && confirm == nil && !renaming ? 0.055 : 0))
-        )
-        .contentShape(.rect)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // The row is a button underneath its content; text lets clicks through, links keep theirs.
+        .background {
+            Button(action: tap) { Color.clear }
+                .buttonStyle(RowButtonStyle(hovering: hovering && confirm == nil && !renaming))
+                .accessibilityHidden(true)
+        }
         .onHover { hovering = $0 }
-        .onTapGesture(perform: tap)
         .contextMenu { menu }
         .onChange(of: row.state) { old, new in if old == .idle && new != .idle { pulse += 1 } }
-        .animation(.snappy(duration: 0.25), value: confirm)
+        .onChange(of: confirm) { _, new in if new != nil { reveal() } }
+        .animation(.snappy(duration: 0.22), value: confirm)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, tap)
     }
 
-    /// Meters and captions start under the label, not under the dot.
-    static let indent: CGFloat = 18
-
     // MARK: Parts
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 0) {
             AccountDot(color: color, filled: row.state != .idle, working: working != nil, pulse: pulse)
+                .frame(width: Self.indent, alignment: .leading)
+                .allowsHitTesting(false)
             if renaming {
                 TextField("Name", text: $draft)
                     .textFieldStyle(.plain)
@@ -81,47 +91,56 @@ struct AccountRow: View {
                     .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.primary.opacity(0.07)))
                     .padding(.horizontal, -6)
             } else {
-                Text(row.label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(1)
-                if namesProvider {
-                    Text(row.provider.displayName)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text(row.label)
+                        .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
-                        .padding(.leading, -4)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                    if namesProvider {
+                        Text(row.provider.displayName)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .allowsHitTesting(false)
+                if row.isBest {
+                    Text("✦")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 5)
+                        .contentShape(.rect)
+                        .help("Most left")
+                        .onTapGesture(perform: tap)
+                        .accessibilityLabel("most left")
                 }
             }
-            if row.isBest {
-                Text("✦")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(color)
-                    .help("Most room left")
+            Spacer(minLength: 10)
+            if let plan = row.plan {
+                Chip(text: plan).allowsHitTesting(false)
             }
-            Spacer(minLength: 6)
-            if let plan = row.plan { Chip(text: plan) }
         }
+        .frame(height: 18)
     }
 
     @ViewBuilder private var caption: some View {
         if let failure {
             Label(failure, systemImage: "exclamationmark.circle")
                 .foregroundStyle(.red)
-                .captionStyle()
+                .captionStyle(lines: 2)
+                .allowsHitTesting(false)
         } else if let working {
-            HStack(spacing: 6) {
-                Text(working).foregroundStyle(.secondary).captionStyle()
-                Button("Cancel") { task?.cancel() }
-                    .buttonStyle(.link)
-                    .font(.system(size: 11))
+            HStack(spacing: 8) {
+                Text(working).foregroundStyle(.secondary).allowsHitTesting(false)
+                Button("Cancel") { task?.cancel() }.buttonStyle(.inlineLink)
             }
+            .captionStyle()
         } else if row.needsSignIn {
             HStack(spacing: 0) {
-                Text(row.error ?? "Signed out").foregroundStyle(.orange)
-                dot
-                Button(row.provider == .kimi || row.provider == .zai ? "Replace key" : "Sign in") {
+                Text(signedOutNote).foregroundStyle(.orange).allowsHitTesting(false)
+                separator
+                Button(usesKey ? "Replace key" : "Sign in") {
                     row.provider == .claude ? connectLimits() : signIn(row.provider)
                 }
                 .buttonStyle(.inlineLink)
@@ -132,23 +151,39 @@ struct AccountRow: View {
             if row.pendingSessions > 0 || !notes.isEmpty || row.error != nil {
                 HStack(spacing: 0) {
                     if let error = row.error {
-                        Text(error).foregroundStyle(.orange)
-                        if row.pendingSessions > 0 || !notes.isEmpty { dot }
+                        Text(error).foregroundStyle(.secondary).allowsHitTesting(false)
+                        if row.pendingSessions > 0 || !notes.isEmpty { separator }
                     }
                     if row.pendingSessions > 0 {
-                        Text(row.pendingSessions == 1 ? "1 new session " : "\(row.pendingSessions) new sessions ")
+                        Text(row.pendingSessions == 1 ? "1 new session" : "\(row.pendingSessions) new sessions")
                             .foregroundStyle(.secondary)
+                            .allowsHitTesting(false)
+                        Text(" ").allowsHitTesting(false)
                         Button("Restart", action: restart).buttonStyle(.inlineLink)
-                        if !notes.isEmpty { dot }
+                        if !notes.isEmpty { separator }
                     }
-                    Text(notes).foregroundStyle(.secondary)
+                    Text(notes).foregroundStyle(.secondary).allowsHitTesting(false)
                 }
                 .captionStyle()
             }
         }
     }
 
-    private var dot: some View { Text("  ·  ").foregroundStyle(.tertiary) }
+    private var usesKey: Bool { row.provider == .kimi || row.provider == .zai }
+
+    /// Says what stopped working, so the link next to it reads as the fix.
+    private var signedOutNote: String {
+        switch row.provider {
+        case .kimi, .zai: row.error ?? "Key no longer works"
+        // The Claude app may be fine; it's the Claude Code login behind exact limits that expired.
+        case .claude: "Limits signed out"
+        case .codex, .grok: "Signed out"
+        }
+    }
+
+    private var separator: some View {
+        Text("  ·  ").foregroundStyle(.tertiary).allowsHitTesting(false)
+    }
 
     /// Limits rows don't sit under a product heading, so a custom label also names the provider.
     private var namesProvider: Bool {
@@ -162,7 +197,7 @@ struct AccountRow: View {
         var parts: [String] = []
         if let n = usage.resetsAvailable, n > 0 { parts.append(UsageText.resets(n)) }
         if let c = usage.credits { parts.append(UsageText.credits(c)) }
-        if let stale = UsageText.stale(usage.asOf, now: now) { parts.append(stale) }
+        if let staleNote { parts.append(staleNote) }
         return parts.joined(separator: "  ·  ")
     }
 
@@ -205,7 +240,9 @@ struct AccountRow: View {
             }
         }
         .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.primary.opacity(0.05)))
+        .contentShape(.rect)
     }
 
     @ViewBuilder private var menu: some View {
@@ -283,18 +320,35 @@ struct AccountRow: View {
         var parts = [row.label, row.provider.displayName]
         if let plan = row.plan { parts.append(plan) }
         parts.append(row.state == .running ? "open" : row.state == .active ? "active" : "not open")
-        for w in meters {
-            parts.append("\(UsageText.spokenWindow(w)) \(UsageText.percent(w.usedPercent)) used, \(UsageText.spokenReset(w.resetsAt, now: now))")
+        if row.isBest { parts.append("most left") }
+        for w in meters { parts.append("\(UsageText.spokenWindow(w)), \(UsageText.spoken(w, now: now))") }
+        if row.needsSignIn { parts.append(signedOutNote + (usesKey ? "" : ", sign in again")) }
+        else if let error = row.error { parts.append(error) }
+        if row.pendingSessions > 0 {
+            parts.append(row.pendingSessions == 1 ? "1 new session" : "\(row.pendingSessions) new sessions")
         }
-        if row.isBest { parts.append("most room left") }
-        if row.needsSignIn { parts.append(row.error ?? "sign in again") }
-        if row.pendingSessions > 0 { parts.append("\(row.pendingSessions) new sessions") }
+        if !notes.isEmpty { parts.append(notes.replacingOccurrences(of: "  ·  ", with: ", ")) }
         return parts.joined(separator: ", ")
     }
 }
 
+/// The row's own surface: a soft fill on hover, a firmer one while pressed.
+private struct RowButtonStyle: ButtonStyle {
+    let hovering: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.primary.opacity(configuration.isPressed ? 0.1 : hovering ? 0.055 : 0))
+            )
+            .contentShape(.rect)
+    }
+}
+
 private extension View {
-    func captionStyle() -> some View {
-        font(.system(size: 11)).lineLimit(1)
+    func captionStyle(lines: Int = 1) -> some View {
+        font(.system(size: 11)).lineLimit(lines).fixedSize(horizontal: false, vertical: true)
     }
 }

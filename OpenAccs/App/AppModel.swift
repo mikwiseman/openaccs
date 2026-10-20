@@ -30,8 +30,10 @@ final class AppModel: PanelModel {
 
     // MARK: Dependencies
 
-    private let paths = Paths()
-    private let secrets: SecretStore = KeychainSecretStore()
+    private let paths = Paths.current
+    /// A test home (Debug, OPENACCS_HOME) keeps its own Keychain items and preferences.
+    private let secrets: SecretStore = KeychainSecretStore(service: Paths.isOverridden ? "is.wai.openaccs.test" : "is.wai.openaccs")
+    private let defaults = Paths.isOverridden ? UserDefaults(suiteName: "is.wai.openaccs.test") ?? .standard : .standard
     private let http: HTTPClient = URLSessionHTTPClient()
     private let store: AccountStore
     private let claude: ClaudeProfiles
@@ -68,11 +70,11 @@ final class AppModel: PanelModel {
     private var openingNow: Set<UUID> = []
     /// The live Codex login the user removed from OpenAccs; not re-added until Codex signs in elsewhere.
     private var dismissedCodex: String? {
-        get { UserDefaults.standard.string(forKey: "dismissedCodex") }
-        set { UserDefaults.standard.set(newValue, forKey: "dismissedCodex") }
+        get { defaults.string(forKey: "dismissedCodex") }
+        set { defaults.set(newValue, forKey: "dismissedCodex") }
     }
     private var lastClaude: UUID? {
-        didSet { UserDefaults.standard.set(lastClaude?.uuidString, forKey: "lastClaude") }
+        didSet { defaults.set(lastClaude?.uuidString, forKey: "lastClaude") }
     }
 
     init(readOnly: Bool = false) {
@@ -87,7 +89,7 @@ final class AppModel: PanelModel {
         kimi = KimiUsage(http: http)
         grokBot = GrokBotUsage(paths: paths)
         grokCLI = GrokCLI(paths: paths)
-        lastClaude = UserDefaults.standard.string(forKey: "lastClaude").flatMap(UUID.init)
+        lastClaude = defaults.string(forKey: "lastClaude").flatMap(UUID.init)
         Task { await start() }
     }
 
@@ -338,7 +340,18 @@ final class AppModel: PanelModel {
         Task { await refreshUsage(force: true) }
     }
 
+    /// `openaccs refresh`: returns when every account has been asked.
+    func refreshNow() async {
+        await refreshUsage(force: true)
+    }
+
+    /// In a task of its own: a caller that goes away (Ctrl-C on `openaccs`) never cuts the fetches short and
+    /// leaves them recorded as failures.
     private func refreshUsage(force: Bool) async {
+        await Task { await self.askProviders(force: force) }.value
+    }
+
+    private func askProviders(force: Bool) async {
         isRefreshing = true
         defer { isRefreshing = false }
         grokBotAccounts = grokBot.accounts().filter { bot in !accounts.contains { $0.grok?.botAccount == bot } }
@@ -435,8 +448,9 @@ final class AppModel: PanelModel {
 
     private func rebuild() {
         var rows: [PanelRow] = []
+        let now = Date()
         for account in accounts {
-            let snapshot = usage[account.id]
+            let snapshot = usage[account.id]?.at(now)
             let problem = problems[account.id]
             var row = PanelRow(
                 id: account.id, provider: account.provider, label: account.label, color: account.color,
@@ -478,16 +492,14 @@ final class AppModel: PanelModel {
         }
     }
 
-    /// ✦ = most room left among a provider's accounts (lowest of their tightest main window).
+    /// ✦ = most room left among a provider's signed-in accounts (in their tightest main window), or with none
+    /// left anywhere, the one back soonest. Same rule as `openaccs best` (`ControlAccount.best`).
     private func markBest(_ rows: inout [PanelRow]) {
         for provider in Provider.allCases {
-            let scored = rows.indices.filter { rows[$0].provider == provider }.compactMap { i -> (Int, Double)? in
-                let main = rows[i].usage?.windows.filter { $0.label == nil } ?? []
-                guard let worst = main.map(\.usedPercent).max() else { return nil }
-                return (i, worst)
-            }
-            guard scored.count > 1, let best = scored.min(by: { $0.1 < $1.1 }) else { continue }
-            rows[best.0].isBest = true
+            let scored = rows.indices.filter { rows[$0].provider == provider && !rows[$0].needsSignIn }
+                .compactMap { i in rows[i].usage?.room.map { (i, $0) } }
+            guard scored.count > 1, let best = Room.best(scored) else { continue }
+            rows[best].isBest = true
         }
     }
 
@@ -500,6 +512,8 @@ final class AppModel: PanelModel {
             try await exclusively(account) { try await openClaude(account) }
         case .codex:
             guard let info = account.codex else { return }
+            // A test home's Codex sign-ins are fake; switching would still quit the real ChatGPT app.
+            guard !Paths.isOverridden else { throw AppError.testHome }
             let others = await codex.otherHolders()
             guard others.isEmpty else { throw AppError.codexBusy(others.count) }
             try await codex.switchTo(info)
@@ -533,10 +547,22 @@ final class AppModel: PanelModel {
         guard let who = claudeCLI.identity(configDir: dir) else { throw AppError.signInIncomplete }
         // The browser may have signed the CLI into another account: never show its limits under this one.
         let expected = profile(account)?.accountUuid
-        if let expected, let actual = who.accountUuid {
-            guard expected.lowercased() == actual.lowercased() else { throw AppError.wrongAccount(who.email, account.label) }
-        } else if let email, let actual = who.email, actual.lowercased() != email.lowercased() {
-            throw AppError.wrongAccount(actual, account.label)
+        let mismatch = if let expected, let uuid = who.accountUuid {
+            expected.lowercased() != uuid.lowercased()
+        } else if let email, let address = who.email {
+            address.lowercased() != email.lowercased()
+        } else {
+            false
+        }
+        if mismatch {
+            // Reconnecting: that folder now holds the other account, so stop reading limits from it.
+            if let j = accounts.firstIndex(where: { $0.id == id }), accounts[j].claude?.cliConfigDir != nil {
+                accounts[j].claude?.cliConfigDir = nil
+                lastFetch[id] = nil
+                save()
+                rebuild()
+            }
+            throw AppError.wrongAccount(who.email, account.label)
         }
         guard let j = accounts.firstIndex(where: { $0.id == id }) else { return }
         accounts[j].claude?.cliConfigDir = dir.path
@@ -712,6 +738,7 @@ enum AppError: LocalizedError {
     case keyRejected(String)
     case wrongAccount(String?, String)
     case migrationFailed
+    case testHome
 
     var errorDescription: String? {
         switch self {
@@ -720,6 +747,7 @@ enum AppError: LocalizedError {
         case .signInIncomplete: "Sign-in didn't finish. Try again."
         case .keyRejected(let name): "\(name) didn't accept this key."
         case .migrationFailed: "Couldn't move this profile's history into ~/.claude, so it wasn't opened on the shared folder."
+        case .testHome: "Codex doesn't switch with a test home (OPENACCS_HOME)."
         case .wrongAccount(let actual, let wanted):
             "Claude Code signed in as \(actual ?? "another account"), not \(wanted). Switch accounts on claude.ai in your browser and try again."
         }

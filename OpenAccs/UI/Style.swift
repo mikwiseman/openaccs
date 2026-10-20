@@ -26,7 +26,7 @@ enum AccountColor {
     }
 }
 
-/// Usage numbers as short words.
+/// Usage as people choose accounts: by what's left, never by what's used.
 enum UsageText {
     static func window(_ w: UsageWindow) -> String {
         switch w.kind {
@@ -39,18 +39,38 @@ enum UsageText {
 
     static func spokenWindow(_ w: UsageWindow) -> String {
         switch w.kind {
-        case .fiveHour: "5 hours"
-        case .weekly: "7 days"
-        case .monthly: "month"
-        case .other: w.label ?? "limit"
+        case .fiveHour: "5-hour limit"
+        case .weekly: "7-day limit"
+        case .monthly: "monthly limit"
+        case .other: "\(w.label ?? "other") limit"
         }
     }
 
-    static func percent(_ used: Double) -> String { "\(Int(used))%" }
+    /// Percent of the window still available, 0...100.
+    static func left(_ w: UsageWindow) -> Double { max(0, 100 - w.usedPercent) }
 
-    /// Warm from 80 %, red when the window is spent.
-    static func tint(_ used: Double) -> Color {
-        used >= 100 ? .red : used >= 80 ? .orange : .primary
+    static func isEmpty(_ w: UsageWindow) -> Bool { w.usedPercent >= 100 }
+
+    /// "62%", "<1%". Rounds down so it never promises more than there is.
+    static func percentLeft(_ w: UsageWindow) -> String {
+        let left = left(w)
+        return left > 0 && left < 1 ? "<1%" : "\(Int(left))%"
+    }
+
+    static func spokenLeft(_ w: UsageWindow) -> String {
+        isEmpty(w) ? "empty" : "\(percentLeft(w).replacingOccurrences(of: "%", with: "")) percent left"
+    }
+
+    /// Calm while there's plenty, warm at 20 % left or less as shown (rounded down), red only when empty.
+    static func tint(left: Double) -> Color {
+        left <= 0 ? .red : left < 21 ? .orange : .primary
+    }
+
+    /// When an empty window refills: "back in 42m", "back in 1h 12m", "back Thu".
+    static func back(_ date: Date?, now: Date) -> String? {
+        guard let date, let short = reset(date, now: now) else { return nil }
+        if short == "now" { return "back any minute" }
+        return date.timeIntervalSince(now) < 24 * 3600 ? "back in \(short)" : "back \(short)"
     }
 
     /// "now", "42m", "1h 12m", "Thu", "Oct 30".
@@ -64,28 +84,39 @@ enum UsageText {
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
 
-    /// Spoken form of `reset` for VoiceOver.
-    static func spokenReset(_ date: Date?, now: Date) -> String {
-        guard let date else { return "" }
-        if date.timeIntervalSince(now) < 24 * 3600 {
-            return "resets in " + Duration.seconds(max(0, date.timeIntervalSince(now)))
-                .formatted(.units(allowed: [.hours, .minutes], width: .wide))
+    /// Spoken form of `reset` ("resets in 2 hours, 10 minutes") or, for an empty window, of `back`.
+    static func spokenReset(_ date: Date?, now: Date, empty: Bool = false) -> String? {
+        guard let date else { return nil }
+        let verb = empty ? "back" : "resets"
+        let seconds = date.timeIntervalSince(now)
+        if seconds < 60 { return empty ? "back any minute" : "resets now" }
+        if seconds < 24 * 3600 {
+            return "\(verb) in " + Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes], width: .wide))
         }
-        return "resets " + date.formatted(.dateTime.weekday(.wide).month().day())
+        return "\(verb) " + date.formatted(.dateTime.weekday(.wide).month(.wide).day())
     }
 
-    /// "as of 12m ago" once numbers are older than 15 minutes.
+    /// "62 percent left, resets in 2 hours", read after the window name ("5-hour limit").
+    static func spoken(_ w: UsageWindow, now: Date) -> String {
+        [spokenLeft(w), spokenReset(w.resetsAt, now: now, empty: isEmpty(w))].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// "updated 2h ago" once numbers are older than 30 minutes (the slowest source asks every 15).
     static func stale(_ asOf: Date, now: Date) -> String? {
         let minutes = Int(now.timeIntervalSince(asOf) / 60)
-        if minutes < 15 { return nil }
-        if minutes < 60 { return "as of \(minutes) min ago" }
-        if minutes < 24 * 60 { return "as of \(minutes / 60)h ago" }
-        return "as of " + asOf.formatted(.dateTime.month(.abbreviated).day())
+        if minutes < 30 { return nil }
+        if minutes < 60 { return "updated \(minutes)m ago" }
+        if minutes < 24 * 60 { return "updated \(minutes / 60)h ago" }
+        return "updated " + asOf.formatted(.dateTime.month(.abbreviated).day())
     }
 
+    /// "$12 balance", "$4.20 extra usage", "120 credits".
     static func credits(_ c: Credits) -> String {
         let isCurrency = c.currency.count == 3 && c.currency == c.currency.uppercased()
-        if isCurrency { return c.amount.formatted(.currency(code: c.currency).precision(.fractionLength(0...2))) }
+        if isCurrency {
+            let cents = c.amount.rounded() == c.amount ? 0 : 2
+            return c.amount.formatted(.currency(code: c.currency).precision(.fractionLength(cents))) + " " + c.label
+        }
         return "\(c.amount.formatted(.number.precision(.fractionLength(0...2)))) \(c.currency)"
     }
 
@@ -129,7 +160,9 @@ struct PillButtonStyle: ButtonStyle {
             .background(
                 Capsule().fill(prominent ? AnyShapeStyle(tint) : AnyShapeStyle(.primary.opacity(0.08)))
             )
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.4)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .contentShape(.capsule)
     }
 }
@@ -139,8 +172,9 @@ struct LinkButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(Color.accentColor)
-            .opacity(configuration.isPressed ? 0.6 : 1)
+            .opacity(configuration.isPressed ? 0.55 : 1)
             .contentShape(.rect)
+            .pointerStyle(.link)
     }
 }
 

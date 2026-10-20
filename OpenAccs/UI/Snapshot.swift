@@ -29,13 +29,18 @@ enum Snapshot {
             while !live.isReady, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
         }
         let host = NSHostingView(rootView: PanelView(model: model, adding: adding)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .environment(\.isSnapshot, true))
-        host.frame.size = host.fittingSize
-        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: args.contains("--dark") ? .darkAqua : .aqua)
         window.contentView = host
-        host.layoutSubtreeIfNeeded()
+        // The list measures itself to size its scroll view; let that settle before drawing.
+        for _ in 0..<20 {
+            host.frame.size = host.fittingSize
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            if host.fittingSize == host.frame.size { break }
+        }
 
         let size = host.bounds.size
         guard let rep = NSBitmapImageRep(

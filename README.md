@@ -4,14 +4,14 @@
 [![macOS 26 or later](https://img.shields.io/badge/macOS-26%2B-111)](#requirements)
 [![MIT license](https://img.shields.io/badge/license-MIT-111)](LICENSE)
 
-OpenAccs is a free, open-source macOS menu bar app that switches between several Claude and Codex (ChatGPT) accounts, shares one Claude Code history across your Claude accounts, and shows the usage limits of Claude, Claude Code, Codex, Grok, Kimi Code and the Z.ai GLM Coding Plan in one panel.
+OpenAccs is a free, open-source macOS menu bar app and command-line tool that switches between several Claude and Codex (ChatGPT) accounts, shares one Claude Code history across your Claude accounts, and shows how much is left of the usage limits of Claude, Claude Code, Codex, Grok, Kimi Code and the Z.ai GLM Coding Plan.
 
 Each Claude account runs as its own Claude desktop profile. Every profile uses the same `~/.claude` folder, so your Claude Code settings, skills and sessions are the same on every account. You switch Codex accounts from the same panel, and the switch covers the ChatGPT app and the `codex` CLI together. OpenAccs never reads or copies your Claude login.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
-    <img src="docs/images/panel-light.png" width="340" alt="The OpenAccs menu bar panel. Two Claude accounts and two Codex accounts each show 5-hour and weekly usage bars with reset times. Below them, Grok, Z.ai and Kimi show their limits.">
+    <img src="docs/images/panel-light.png" width="340" alt="The OpenAccs menu bar panel. Two Claude accounts and two Codex accounts show how much is left of their 5-hour and weekly limits, with reset times. One Claude limit is empty and comes back in 1h 12m. Below them, Grok, Z.ai and Kimi show their limits.">
   </picture>
 </p>
 
@@ -41,15 +41,15 @@ A running Codex keeps its account in memory, so OpenAccs quits the ChatGPT app b
 
 ### See usage limits for Claude, Codex, Grok, Kimi and Z.ai
 
-Each account row shows how much of each limit you've used and when the limit resets. A bar is orange at 80% or more and red at 100%. A small star (✦) marks the account with the most room left for each product. The menu bar icon has two rings for the 5-hour and weekly use of the Claude account you used last.
+Each account row shows how much is left of each limit and when it resets. A full bar means the limit is untouched, and it empties as you use it. A bar turns orange when 20% or less is left. An empty limit shows "Empty" in red and when it comes back. A small star (✦) marks the account with the most left for each product, or, when all of them are empty, the one that comes back first. The menu bar icon has two rings for what's left of the 5-hour and weekly limits of the Claude account you used last.
 
 | Provider | What OpenAccs shows | How you connect it |
 | --- | --- | --- |
-| Claude | 5-hour and weekly use. After you connect exact limits, it also shows reset times, your plan and extra usage spend. | Nothing to set up. OpenAccs reads the usage file (`plan-usage-history.json`) that the Claude app writes for each profile, with no sign-in. For reset times, [connect Claude Code once](#connect-exact-claude-limits). |
-| Codex | 5-hour and weekly use with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
-| Grok | Weekly use, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
-| Kimi Code | 5-hour, weekly and monthly use with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |
-| Z.ai GLM Coding Plan | 5-hour and weekly use with reset times, and your plan. | A Z.ai API key, or a BigModel key in China. |
+| Claude | What's left of the 5-hour and weekly limits. After you connect exact limits, it also shows reset times, your plan and extra usage spend. | Nothing to set up. OpenAccs reads the usage file (`plan-usage-history.json`) that the Claude app writes for each profile, with no sign-in. For reset times, [connect Claude Code once](#connect-exact-claude-limits). |
+| Codex | What's left of the 5-hour and weekly limits with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
+| Grok | What's left of the weekly limit, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
+| Kimi Code | What's left of the 5-hour, weekly and monthly limits with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |
+| Z.ai GLM Coding Plan | What's left of the 5-hour and weekly limits with reset times, and your plan. | A Z.ai API key, or a BigModel key in China. |
 
 OpenAccs reads local files every minute and asks providers and CLIs every 5 to 15 minutes. To update now, choose Refresh in the More menu (the three dots).
 
@@ -59,6 +59,7 @@ OpenAccs reads local files every minute and asks providers and CLIs every 5 to 1
 - **Codex.** OpenAccs keeps each saved Codex sign-in in the macOS Keychain, never in a plain file. The active sign-in stays in `~/.codex/auth.json`, where Codex keeps it anyway. OpenAccs renews the tokens of saved accounts that aren't active through OpenAI's own sign-in server, and it leaves the active sign-in to Codex.
 - **API keys.** OpenAccs keeps Kimi and Z.ai keys in the macOS Keychain. It checks each key with the provider before it saves it, so a mistyped key never becomes an account.
 - **Network.** OpenAccs has no analytics, no telemetry and no update check. It talks only to `chatgpt.com` and `auth.openai.com` for Codex, `api.kimi.com` or `api.kimi.ai` for Kimi, and `api.z.ai` or `open.bigmodel.cn` for Z.ai. The Claude and Grok CLIs talk to their own servers themselves.
+- **Command line.** The `openaccs` command talks to the app over a socket in `~/Library/Application Support/OpenAccs/`, which only your user account can open. Keys you add from the terminal are read from stdin and never written to logs.
 - **Your files.** Every write is atomic, so a crash never leaves a half-written file. OpenAccs never edits a file that a running app is using. Before it replaces or removes anything, it copies the old version to `~/Library/Application Support/OpenAccs/Backups/`.
 - **Sign-outs.** OpenAccs never signs out of anything. Removing an account removes it from OpenAccs only, and the Claude profile and its history stay on disk. Signing out of Codex would revoke that sign-in everywhere, so OpenAccs never does it.
 
@@ -162,6 +163,32 @@ You can create a Kimi Code key in the [Kimi Code console](https://www.kimi.ai/co
 
 Click Add and choose Grok. If the Grok Bot app is signed in on your Mac, its accounts appear in the list, and you click Add next to one. To use the Grok CLI instead, click Sign in under Grok CLI, and OpenAccs runs `grok login` in a private folder.
 
+### Use OpenAccs from the terminal
+
+OpenAccs installs the `openaccs` command in `~/.local/bin` when that folder exists. The command does everything the panel does, through the running app, so it follows the same rules and needs no extra permissions.
+
+```sh
+openaccs                    # what's left on every account, and when it comes back
+openaccs best claude        # the Claude account with the most left
+openaccs use work           # open the "work" Claude profile, or switch Codex to it
+openaccs use --best codex   # switch Codex to the account with the most left
+openaccs status --json      # the same data for scripts
+```
+
+| Command | What it does |
+| --- | --- |
+| `openaccs [status] [provider] [--json]` | What's left on every account, and when it comes back. `limits` works too. |
+| `openaccs best <provider> [--json]` | The account with the most left. |
+| `openaccs use <account> [--yes]` | Claude: open that profile. Codex: switch to it (asks first unless you pass `--yes`). Others: open the usage page. `switch` and `open` work too. |
+| `openaccs use --best <provider> [--yes]` | The same, for the account with the most left. |
+| `openaccs restart <account>` | Restart a Claude profile so it loads new sessions. |
+| `openaccs refresh [--json]` | Ask every provider now, then show the status. |
+| `openaccs connect <account>` | Connect exact Claude limits (Claude Code sign-in in the browser). |
+| `openaccs add claude <name>` | Add a Claude profile. Also `add codex`, `add grok`, `add grok-bot`, and `add kimi` or `add zai` with a key (`-` or no key reads it from stdin, out of your shell history; `--china` for China accounts). |
+| `openaccs rename <account> <new name>` and `openaccs remove <account> [--yes]` | Rename or remove an account. |
+
+An `<account>` is a name or a unique part of it, `provider:name`, or the number that `status` shows. If OpenAccs isn't running, the command starts it in the background. The exit code is 0 on success, 1 on an error, 2 on a usage mistake and 3 when OpenAccs can't be reached. You can also run the command as `/Applications/OpenAccs.app/Contents/MacOS/OpenAccs cli <command>`.
+
 ### Manage accounts
 
 Right-click any account to rename it, change its color or remove it. For a Claude account, you can also show its data folder. Removing an account never signs it out.
@@ -196,17 +223,21 @@ No. Codex keeps local history in `~/.codex` for all accounts, and OpenAccs only 
 
 Right-click the Claude account and choose Connect Exact Limits. After you sign in to Claude Code once, OpenAccs shows when the 5-hour and weekly limits reset. Without that step, it shows the percentages from the Claude app without reset times.
 
+### How do I check my Claude and Codex limits from the terminal?
+
+Run `openaccs`. It prints what's left on every account and when each limit comes back, and `openaccs status --json` gives the same data to scripts.
+
 ### How do I check my Codex usage limits?
 
-Add your Codex account. OpenAccs shows the 5-hour and weekly limits with reset times, your credit balance and your banked resets, which are the same numbers the Codex app shows.
+Add your Codex account. OpenAccs shows what's left of the 5-hour and weekly limits with reset times, your credit balance and your banked resets, which are the same numbers the Codex app shows.
 
 ### How do I check my Z.ai GLM Coding Plan usage?
 
-Add your Z.ai API key, or your BigModel key in China. OpenAccs shows the 5-hour and weekly quota with reset times.
+Add your Z.ai API key, or your BigModel key in China. OpenAccs shows what's left of the 5-hour and weekly quota with reset times.
 
 ### How do I check my Kimi Code usage?
 
-Add your Kimi Code API key. OpenAccs shows the 5-hour, weekly and monthly quota with reset times.
+Add your Kimi Code API key. OpenAccs shows what's left of the 5-hour, weekly and monthly quota with reset times.
 
 ### Can I see my Grok usage?
 

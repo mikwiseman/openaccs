@@ -1,57 +1,83 @@
 import SwiftUI
 import OpenAccsCore
 
-/// One limit window: name · thin capsule · used % · reset. Columns line up across every row.
+/// One limit window: name · what's left as a capsule · "62% left" · reset. Columns line up across
+/// every row. An empty window drops the bar and says when it comes back.
 struct Meter: View {
     let window: UsageWindow
     let now: Date
 
+    static let nameWidth: CGFloat = 22
+    static let leftWidth: CGFloat = 62
+    static let resetWidth: CGFloat = 56
+
     var body: some View {
-        let tint = UsageText.tint(window.usedPercent)
         HStack(spacing: 0) {
             Text(UsageText.window(window))
-                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 24, alignment: .leading)
-            Bar(fraction: window.usedPercent / 100, tint: tint)
-            Text(UsageText.percent(window.usedPercent))
+                .frame(width: Self.nameWidth, alignment: .leading)
+            if UsageText.isEmpty(window) {
+                empty
+            } else {
+                gauge
+            }
+        }
+        .frame(height: 15)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(UsageText.spokenWindow(window))
+        .accessibilityValue(UsageText.spoken(window, now: now))
+    }
+
+    private var gauge: some View {
+        let left = UsageText.left(window)
+        let tint = UsageText.tint(left: left)
+        return HStack(spacing: 0) {
+            Bar(fraction: left / 100, tint: tint)
+            Text("\(Text(UsageText.percentLeft(window)).foregroundStyle(tint)) \(Text("left").foregroundStyle(.secondary))")
                 .font(.system(size: 11.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(tint == .primary ? AnyShapeStyle(.primary) : AnyShapeStyle(tint))
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: Self.leftWidth, alignment: .trailing)
             Text(UsageText.reset(window.resetsAt, now: now) ?? "")
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: Self.resetWidth, alignment: .trailing)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(UsageText.spokenWindow(window))
-        .accessibilityValue("\(UsageText.percent(window.usedPercent)) used, \(UsageText.spokenReset(window.resetsAt, now: now))")
+    }
+
+    /// Nothing to read on a bar: say it's empty and when it's back, which is all that matters now.
+    private var empty: some View {
+        HStack(spacing: 6) {
+            Text("Empty")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.red)
+            if let back = UsageText.back(window.resetsAt, now: now) {
+                Text(back)
+                    .font(.system(size: 11.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.primary)
+            }
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
     }
 }
 
-/// The capsule. Fills from the left and eases to new values.
+/// What's left, as a capsule: full when untouched, emptying toward the left as it's used.
 private struct Bar: View {
     let fraction: Double
     let tint: Color
-    @State private var shown = 0.0
-    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
-        let value = isSnapshot ? fraction : shown
         Capsule()
-            .fill(.primary.opacity(0.09))
+            .fill(.primary.opacity(0.08))
             .overlay(alignment: .leading) {
                 GeometryReader { g in
-                    if value > 0 {
-                        Capsule()
-                            .fill(tint == .primary ? AnyShapeStyle(.primary.opacity(0.62)) : AnyShapeStyle(tint))
-                            .frame(width: max(g.size.height, g.size.width * min(value, 1)))
-                    }
+                    Capsule()
+                        .fill(tint == .primary ? AnyShapeStyle(.primary.opacity(0.42)) : AnyShapeStyle(tint))
+                        .frame(width: max(g.size.height, g.size.width * min(fraction, 1)))
                 }
             }
             .frame(height: 4)
-            .onAppear { withAnimation(.smooth(duration: 0.7).delay(0.05)) { shown = fraction } }
-            .onChange(of: fraction) { _, new in withAnimation(.smooth(duration: 0.5)) { shown = new } }
+            .animation(.smooth(duration: 0.5), value: fraction)
     }
 }
 
@@ -99,9 +125,4 @@ struct AccountDot: View {
         var scale = 1.0
         var opacity = 0.0
     }
-}
-
-extension EnvironmentValues {
-    /// True while rendering a still image: skip entry animations.
-    @Entry var isSnapshot = false
 }

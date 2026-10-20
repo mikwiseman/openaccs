@@ -19,6 +19,12 @@ public struct UsageWindow: Codable, Hashable, Sendable {
         self.usedPercent = min(max(usedPercent, 0), 100)
         self.resetsAt = resetsAt
     }
+
+    /// The window at `now`: once its reset has passed it is full again, and the next reset isn't known yet.
+    public func at(_ now: Date) -> UsageWindow {
+        guard let resetsAt, resetsAt <= now else { return self }
+        return UsageWindow(kind: kind, label: label, usedPercent: 0)
+    }
 }
 
 /// Money-like balance: prepaid credits, extra usage spent, wallet.
@@ -58,6 +64,13 @@ public struct UsageSnapshot: Codable, Hashable, Sendable {
 
     public func window(_ kind: UsageWindow.Kind) -> UsageWindow? {
         windows.first { $0.kind == kind && $0.label == nil }
+    }
+
+    /// These numbers at `now`: a window whose reset has passed is full, however old the reading.
+    public func at(_ now: Date) -> UsageSnapshot {
+        var snapshot = self
+        snapshot.windows = windows.map { $0.at(now) }
+        return snapshot
     }
 }
 

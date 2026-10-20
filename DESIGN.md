@@ -162,11 +162,18 @@ public struct GrokCLI: Sendable {
 ## UI
 
 - `MenuBarExtra(.window)`, ~340 pt wide. Sections: **Claude**, **Codex**, then **Limits** (Grok, Kimi, Z.ai). Empty sections hidden.
-- Row: color dot (filled = running/active, ring = idle) · label · plan chip. Below: two meters, 5h and 7d (or whatever windows exist), each a thin capsule with %, and the reset ("2h 10m", "Thu"). A caption line for credits / banked resets / "as of 12 min ago" when stale. Warm color ≥ 80 %, red at 100 %.
-- A small ✦ marks the account with the most room per product.
+- Row: color dot (filled = running/active, ring = idle) · label · plan chip. Below: one meter per main window (5h, 7d, month) showing what's LEFT: the bar is the remaining amount (full = untouched), "62% left", and the reset ("2h 10m", "Thu"). An empty window has no bar: "Empty · back in 1h 12m", the strongest thing in the row. Calm gray while plenty is left, orange at 20% left or less, red only when empty. A caption line for credits / banked resets / "updated 2h ago" when older than 30 minutes (the numbers fade). A window whose reset time has passed shows full until the next reading. The list scrolls past 680 pt, and a confirmation opened near its edge scrolls into view.
+- A small ✦ marks the account with the most left per product (least left across its main windows is highest; when every account is empty, the one back soonest); accounts that need sign-in never get it.
 - Click: Claude → open that profile (activate or launch). Codex → inline confirm "Restart Codex as …?" then switch. Limits rows → provider usage page.
 - Running Claude profile with sessions it hasn't loaded: "3 new sessions · Restart" link.
 - Context menu: Rename, Color, Connect exact limits (Claude), Show data folder, Remove.
 - Footer: "+ Add" menu (Claude, Codex, Grok, Kimi, Z.ai) and "⋯" (Refresh, Launch at login, Quit).
-- Menu-bar icon: a template glyph with two concentric arcs = 5h and 7d of the Claude profile you used last.
+- Menu-bar icon: a template glyph with two concentric rings = what's left of 5h (outer) and 7d (inner) of the Claude profile you used last. A full ring = untouched, a faint empty ring = out, a thin outline = no reading.
 - `OpenAccs --snapshot <png> [--demo] [--dark]` renders the panel to a PNG and exits (for verification without clicking).
+
+## Command line
+
+- `openaccs` is the app's own executable in CLI mode: argv[0] is exactly `openaccs` (the app links `~/.local/bin/openaccs` to itself at launch when that folder exists, and only creates the link or repoints an older OpenAccs link), or argv[1] is `cli`. CLI mode runs before SwiftUI starts and never registers with LaunchServices.
+- The CLI is a thin client. The running app serves one JSON line in, one JSON line out on `~/Library/Application Support/OpenAccs/control.sock` (folder 0700, socket 0600) and runs every command through the same AppModel actions as the panel. If the app isn't reachable, the CLI launches it in the background and waits up to 15 s.
+- Commands: status/limits, best, use/switch/open (Codex asks y/N on a TTY, refuses without `--yes` otherwise), restart, refresh, connect, add, rename, remove, help, version. Accounts match by name, unique part, `provider:name` or the row number. `--json` prints a stable schema. Exit codes: 0 ok, 1 error, 2 usage, 3 not reachable.
+- API keys for `add kimi|zai` come from stdin with `-` (or no key) and never appear in logs or child-process arguments.

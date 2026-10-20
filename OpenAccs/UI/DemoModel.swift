@@ -2,6 +2,7 @@ import SwiftUI
 import OpenAccsCore
 
 /// Realistic stand-in data for snapshots and UI work. Actions only pretend.
+/// `OPENACCS_DEMO=empty` starts with no accounts; `OPENACCS_DEMO=long` adds every edge case.
 @MainActor @Observable
 final class DemoModel: PanelModel {
     var rows: [PanelRow]
@@ -14,64 +15,121 @@ final class DemoModel: PanelModel {
 
     init(now: Date = Date()) {
         // A little slack so "1h 12m" doesn't tick to "1h 11m" while a snapshot renders.
-        let soon = now.addingTimeInterval(72 * 60 + 30)
+        func inMinutes(_ m: Int) -> Date { now.addingTimeInterval(Double(m) * 60 + 30) }
         func next(_ weekday: Int, hour: Int) -> Date {
             Calendar.current.nextDate(after: now, matching: DateComponents(hour: hour, minute: 0, weekday: weekday),
                                       matchingPolicy: .nextTime) ?? now
         }
-        let thu = next(5, hour: 9), fri = next(6, hour: 14), sat = next(7, hour: 11)
-        let ids = (0..<7).map { _ in UUID() }
+        func usage(_ plan: String?, _ windows: [UsageWindow], resets: Int? = nil, credits: Credits? = nil,
+                   minutesAgo: Int = 1, source: String = "ChatGPT") -> UsageSnapshot {
+            UsageSnapshot(plan: plan, windows: windows, credits: credits, resetsAvailable: resets,
+                          asOf: now.addingTimeInterval(Double(-minutesAgo * 60)), source: source)
+        }
+        let thu = next(5, hour: 9), fri = next(6, hour: 14), sat = next(7, hour: 11), mon = next(2, hour: 18)
 
         rows = [
             PanelRow(
-                id: ids[0], provider: .claude, label: "me@example.com", color: 0, plan: "Max", state: .running,
-                usage: UsageSnapshot(plan: "Max", windows: [
-                    UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: soon),
+                id: UUID(), provider: .claude, label: "me@example.com", color: 0, plan: "Max", state: .running,
+                usage: usage("Max", [
+                    UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: inMinutes(72)),
                     UsageWindow(kind: .weekly, usedPercent: 85, resetsAt: thu),
-                ], asOf: now.addingTimeInterval(-90), source: "Claude Code"),
+                ], source: "Claude Code"),
                 hasFolder: true
             ),
             PanelRow(
-                id: ids[1], provider: .claude, label: "work@example.com", color: 1, plan: "Team", state: .running,
-                usage: UsageSnapshot(plan: "Team", windows: [
-                    UsageWindow(kind: .fiveHour, usedPercent: 2, resetsAt: now.addingTimeInterval(4 * 3600 + 21 * 60 + 30)),
-                    UsageWindow(kind: .weekly, usedPercent: 14, resetsAt: next(2, hour: 18)),
-                ], asOf: now.addingTimeInterval(-240), source: "Claude app"),
+                id: UUID(), provider: .claude, label: "work@example.com", color: 1, plan: "Team", state: .running,
+                usage: usage("Team", [
+                    UsageWindow(kind: .fiveHour, usedPercent: 2, resetsAt: inMinutes(4 * 60 + 21)),
+                    UsageWindow(kind: .weekly, usedPercent: 14, resetsAt: mon),
+                ], minutesAgo: 4, source: "Claude app"),
                 pendingSessions: 3, isBest: true, canConnectLimits: true, hasFolder: true
             ),
             PanelRow(
-                id: ids[2], provider: .codex, label: "me@example.com", color: 2, plan: "Pro", state: .active,
-                usage: UsageSnapshot(plan: "Pro", windows: [
+                id: UUID(), provider: .codex, label: "me@example.com", color: 2, plan: "Pro", state: .active,
+                usage: usage("Pro", [
+                    UsageWindow(kind: .fiveHour, usedPercent: 31, resetsAt: inMinutes(3 * 60 + 2)),
                     UsageWindow(kind: .weekly, usedPercent: 88, resetsAt: fri),
-                ], resetsAvailable: 0,
-                asOf: now.addingTimeInterval(-60), source: "ChatGPT")
+                ], resets: 0)
             ),
             PanelRow(
-                id: ids[3], provider: .codex, label: "team@example.com", color: 3, plan: "Plus", state: .idle,
-                usage: UsageSnapshot(plan: "Plus", windows: [
-                    UsageWindow(kind: .fiveHour, usedPercent: 20, resetsAt: now.addingTimeInterval(2 * 3600 + 40 * 60 + 30)),
+                id: UUID(), provider: .codex, label: "team@example.com", color: 3, plan: "Plus", state: .idle,
+                usage: usage("Plus", [
+                    UsageWindow(kind: .fiveHour, usedPercent: 20, resetsAt: inMinutes(2 * 60 + 40)),
                     UsageWindow(kind: .weekly, usedPercent: 41, resetsAt: next(1, hour: 8)),
-                ], resetsAvailable: 1, asOf: now.addingTimeInterval(-60), source: "ChatGPT"),
+                ], resets: 1),
                 isBest: true
             ),
             PanelRow(
-                id: ids[4], provider: .grok, label: "Grok", color: 7, plan: "SuperGrok", state: .active,
-                usage: UsageSnapshot(plan: "SuperGrok", windows: [
-                    UsageWindow(kind: .weekly, usedPercent: 47, resetsAt: sat),
-                ], asOf: now.addingTimeInterval(-2 * 3600 - 300), source: "Grok Bot")
+                id: UUID(), provider: .grok, label: "Grok", color: 7, plan: "SuperGrok", state: .active,
+                usage: usage("SuperGrok", [UsageWindow(kind: .weekly, usedPercent: 47, resetsAt: sat)],
+                             minutesAgo: 125, source: "Grok Bot")
             ),
             PanelRow(
-                id: ids[5], provider: .zai, label: "Z.ai", color: 5, plan: "Pro", state: .active,
-                usage: UsageSnapshot(plan: "Pro", windows: [
-                    UsageWindow(kind: .fiveHour, usedPercent: 12, resetsAt: now.addingTimeInterval(3 * 3600 + 5 * 60 + 30)),
+                id: UUID(), provider: .zai, label: "Z.ai", color: 5, plan: "Pro", state: .active,
+                usage: usage("Pro", [
+                    UsageWindow(kind: .fiveHour, usedPercent: 12, resetsAt: inMinutes(3 * 60 + 5)),
                     UsageWindow(kind: .weekly, usedPercent: 33, resetsAt: next(4, hour: 10)),
-                ], asOf: now.addingTimeInterval(-60), source: "API key")
+                ], source: "API key")
             ),
             PanelRow(
-                id: ids[6], provider: .kimi, label: "Kimi", color: 4, plan: nil, state: .idle,
+                id: UUID(), provider: .kimi, label: "Kimi", color: 4, plan: nil, state: .idle,
                 usage: nil, error: "Key no longer works", needsSignIn: true
             ),
         ]
+
+        switch ProcessInfo.processInfo.environment["OPENACCS_DEMO"] {
+        case "empty":
+            rows = []
+        case "long":
+            notice = "accounts.json could not be read. Showing what OpenAccs found on this Mac."
+            rows.insert(contentsOf: [
+                PanelRow(
+                    id: UUID(), provider: .claude, label: "a.very.long.name.for.a.person@subsidiary.example.com",
+                    color: 3, plan: "Enterprise", state: .idle,
+                    usage: usage("Enterprise", [
+                        UsageWindow(kind: .fiveHour, usedPercent: 0, resetsAt: nil),
+                        UsageWindow(kind: .weekly, usedPercent: 99.6, resetsAt: thu),
+                    ], credits: Credits(amount: 4.2, currency: "USD", label: "extra usage")),
+                    hasFolder: true
+                ),
+                PanelRow(
+                    id: UUID(), provider: .claude, label: "Side project", color: 5, plan: nil, state: .idle,
+                    usage: nil, error: "Open this profile once to see limits", canConnectLimits: true, hasFolder: true
+                ),
+                PanelRow(
+                    id: UUID(), provider: .claude, label: "Lab", color: 6, plan: "Pro", state: .running,
+                    usage: usage("Pro", [
+                        UsageWindow(kind: .fiveHour, usedPercent: 64, resetsAt: inMinutes(14)),
+                        UsageWindow(kind: .weekly, usedPercent: 100, resetsAt: sat),
+                    ], source: "Claude Code"),
+                    pendingSessions: 1, hasFolder: true
+                ),
+                PanelRow(
+                    id: UUID(), provider: .claude, label: "Old login", color: 7, plan: "Max", state: .idle,
+                    usage: nil, error: "Sign in again", needsSignIn: true, hasFolder: true
+                ),
+            ], at: 2)
+            rows.append(contentsOf: [
+                PanelRow(
+                    id: UUID(), provider: .codex, label: "ops@example.com", color: 4, plan: "Business", state: .idle,
+                    usage: nil, error: "Offline"
+                ),
+                PanelRow(
+                    id: UUID(), provider: .kimi, label: "Moonshot team", color: 1, plan: "Andante", state: .active,
+                    usage: usage("Andante", [
+                        UsageWindow(kind: .fiveHour, usedPercent: 79, resetsAt: inMinutes(48)),
+                        UsageWindow(kind: .weekly, usedPercent: 81, resetsAt: fri),
+                        UsageWindow(kind: .monthly, usedPercent: 52, resetsAt: now.addingTimeInterval(19 * 86400)),
+                    ], credits: Credits(amount: 12, currency: "USD", label: "wallet"), minutesAgo: 3 * 24 * 60, source: "API key")
+                ),
+                PanelRow(
+                    id: UUID(), provider: .zai, label: "Z.ai China", color: 0, plan: nil, state: .idle,
+                    usage: nil, error: "No plan with limits"
+                ),
+            ])
+        default:
+            break
+        }
     }
 
     func open(_ id: UUID) async throws {
