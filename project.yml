@@ -1,0 +1,49 @@
+name: OpenAccs
+options:
+  bundleIdPrefix: is.wai
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  OpenAccsKit:
+    path: Packages/OpenAccsKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    # Local builds sign to run on this Mac; scripts/release.sh signs with Developer ID and notarizes.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  OpenAccs:
+    type: application
+    platform: macOS
+    sources: [OpenAccs]
+    dependencies:
+      - package: OpenAccsKit
+        product: OpenAccsCore
+      - package: OpenAccsKit
+        product: ClaudeKit
+      - package: OpenAccsKit
+        product: CodexKit
+      - package: OpenAccsKit
+        product: LimitsKit
+    info:
+      path: OpenAccs/Info.plist
+      properties:
+        CFBundleDisplayName: OpenAccs
+        CFBundleName: OpenAccs
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        LSUIElement: true
+        NSHumanReadableCopyright: "© 2026 Mik Wiseman"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: is.wai.openaccs
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_ENTITLEMENTS: ""
