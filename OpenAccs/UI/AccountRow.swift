@@ -302,7 +302,11 @@ struct AccountRow: View {
         failure = nil
         busy = true
         task = Task {
-            let reveal = Task { try await Task.sleep(for: .milliseconds(250)); working = caption }
+            let reveal = Task {
+                try await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }   // finished just as the delay ran out
+                working = caption
+            }
             do {
                 try await action()
                 pulse += 1

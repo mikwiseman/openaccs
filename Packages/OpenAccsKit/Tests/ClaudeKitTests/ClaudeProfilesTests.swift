@@ -117,6 +117,38 @@ import Testing
         #expect(profiles.runningByPath() == nil)
     }
 
+    /// A second Claude instance can be up with its window shown while the system never reports the launch
+    /// finished; opening must return once the profile's process is there.
+    @MainActor @Test func openReturnsWhenTheProcessAppearsEvenIfTheLaunchNeverReportsBack() async throws {
+        let home = try TempHome()
+        let custom = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
+        let launched = Flag()
+        let profiles = ClaudeProfiles(
+            paths: home.paths,
+            processes: { launched.isSet ? [claudeProcess(pid: 10, dataDir: nil), claudeProcess(pid: 77, dataDir: custom)] : [claudeProcess(pid: 10, dataDir: nil)] },
+            launch: { _, arguments, _ in
+                #expect(arguments == ["--user-data-dir=\(custom.path)"])
+                launched.set()   // and never calls back, like the real launch here
+            }
+        )
+        let pid = try await profiles.open(profiles.resolve(ClaudeAccountInfo(dataDir: custom.path)), timeout: .seconds(5))
+        #expect(pid == 77)
+    }
+
+    @MainActor @Test func openReportsALaunchThatFailsAndGivesUpWhenNothingStarts() async throws {
+        let home = try TempHome()
+        let custom = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
+        struct Broken: Error {}
+        let failing = ClaudeProfiles(paths: home.paths, processes: { [] }, launch: { _, _, done in done(Broken()) })
+        await #expect(throws: Broken.self) {
+            try await failing.open(failing.resolve(ClaudeAccountInfo(dataDir: custom.path)), timeout: .seconds(5))
+        }
+        let silent = ClaudeProfiles(paths: home.paths, processes: { [] }, launch: { _, _, _ in })
+        await #expect(throws: ClaudeLaunchError.didNotStart) {
+            try await silent.open(silent.resolve(ClaudeAccountInfo(dataDir: custom.path)), timeout: .milliseconds(600))
+        }
+    }
+
     @Test func launchesDefaultWithoutArgumentsAndOthersWithTheirFolder() throws {
         let home = try TempHome()
         let profiles = ClaudeProfiles(paths: home.paths, processes: { [] })

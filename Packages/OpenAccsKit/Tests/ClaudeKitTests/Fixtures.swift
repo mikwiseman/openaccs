@@ -57,3 +57,11 @@ func claudeProcess(pid: pid_t = 4242, dataDir: URL?, launched: Date = Date(timeI
     if let dataDir { args.append("--user-data-dir=\(dataDir.path)") }
     return ClaudeProcess(pid: pid, arguments: args, launchDate: launched)
 }
+
+/// Set once, read from any thread.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.withLock { value = true } }
+    var isSet: Bool { lock.withLock { value } }
+}

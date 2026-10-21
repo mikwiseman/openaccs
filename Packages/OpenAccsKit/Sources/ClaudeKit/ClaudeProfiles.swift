@@ -42,10 +42,13 @@ public enum ClaudeLaunchError: Error, Equatable, Sendable, LocalizedError {
     /// The profile's data folder may be in use by a Claude process OpenAccs cannot bring forward.
     /// Launching again would put two processes on one folder, so OpenAccs refuses.
     case alreadyRunning
+    /// No Claude process for the profile appeared in time.
+    case didNotStart
 
     public var errorDescription: String? {
         switch self {
         case .alreadyRunning: "Claude is already running on this profile"
+        case .didNotStart: "Claude didn't start. Try again."
         }
     }
 }
@@ -64,18 +67,32 @@ struct ClaudeProcess: Sendable {
     }
 }
 
+/// Starts Claude.app with these arguments; `done` gets the launch error, if any. It may never be called:
+/// for a second Claude instance the system can keep the launch pending long after the window is up.
+typealias ClaudeLaunch = @Sendable (_ app: URL, _ arguments: [String], _ done: @escaping @Sendable (Error?) -> Void) -> Void
+
 /// Finds, resolves, launches and quits Claude desktop profiles. Never touches a login.
 public struct ClaudeProfiles: Sendable {
     public let paths: Paths
     let processes: @Sendable () -> [ClaudeProcess]
+    let launch: ClaudeLaunch
 
     public init(paths: Paths) {
-        self.init(paths: paths, processes: ClaudeProcess.live)
+        self.init(paths: paths, processes: ClaudeProcess.live, launch: Self.liveLaunch)
     }
 
-    init(paths: Paths, processes: @escaping @Sendable () -> [ClaudeProcess]) {
+    init(paths: Paths, processes: @escaping @Sendable () -> [ClaudeProcess], launch: @escaping ClaudeLaunch = { _, _, _ in }) {
         self.paths = paths
         self.processes = processes
+        self.launch = launch
+    }
+
+    static let liveLaunch: ClaudeLaunch = { app, arguments, done in
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = arguments
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: app, configuration: configuration) { _, error in done(error) }
     }
 
     // MARK: Resolve
@@ -276,19 +293,25 @@ public struct ClaudeProfiles: Sendable {
     /// Brings the profile's Claude forward if it runs, otherwise launches a new instance on its folder.
     /// Never launches a second process on a folder that is in use. Returns the pid.
     @MainActor
-    public func open(_ profile: ClaudeProfile) async throws -> pid_t {
+    public func open(_ profile: ClaudeProfile, timeout: Duration = .seconds(60)) async throws -> pid_t {
+        let path = profile.dataDir.standardizedFileURL.path
         guard let running = runningByPath() else { throw ClaudeLaunchError.alreadyRunning }
-        if let process = running[profile.dataDir.standardizedFileURL.path] {
+        if let process = running[path] {
             guard let app = NSRunningApplication(processIdentifier: process.pid) else { throw ClaudeLaunchError.alreadyRunning }
             app.activate()
             return process.pid
         }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        configuration.arguments = launchArguments(for: profile)
-        configuration.activates = true
-        let app = try await NSWorkspace.shared.openApplication(at: paths.claudeApp, configuration: configuration)
-        return app.processIdentifier
+        let failure = LaunchFailure()
+        launch(paths.claudeApp, launchArguments(for: profile)) { failure.error = $0 }
+        // Opened = its process is there, not when the launch reports back (that can stay pending).
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if let error = failure.error { throw error }
+            if let pid = runningByPath()?[path]?.pid { return pid }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        throw ClaudeLaunchError.didNotStart
     }
 
     /// No arguments for the default profile; `--user-data-dir=<path>` for every other one.
@@ -311,5 +334,15 @@ public struct ClaudeProfiles: Sendable {
             try? await Task.sleep(for: .milliseconds(200))
         }
         return app.isTerminated || !ProcessList.isAlive(pid)
+    }
+}
+
+/// The launch error, set from whatever thread the system calls back on.
+private final class LaunchFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Error?
+    var error: Error? {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }
