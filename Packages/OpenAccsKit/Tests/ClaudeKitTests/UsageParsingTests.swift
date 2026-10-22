@@ -49,6 +49,19 @@ private func iso(_ string: String) -> Date {
         #expect(ClaudeAppUsage.read(profile: profile)?.window(.weekly)?.usedPercent == 8)
     }
 
+    @Test func numbersOnlyLastAsLongAsTheirWindow() {
+        let now = Date()
+        func usage(_ age: TimeInterval) -> UsageSnapshot {
+            UsageSnapshot(windows: [UsageWindow(kind: .fiveHour, usedPercent: 100), UsageWindow(kind: .weekly, usedPercent: 30),
+                                    UsageWindow(kind: .weekly, label: "Opus", usedPercent: 50)],
+                          asOf: now.addingTimeInterval(-age), source: ClaudeAppUsage.source)
+        }
+        #expect(ClaudeAppUsage.current(usage(3600), now: now)?.windows.count == 3)
+        // Five hours on, that window has started over at least once: its number says nothing anymore.
+        #expect(ClaudeAppUsage.current(usage(5 * 3600 + 1), now: now)?.windows.map(\.kind) == [.weekly, .weekly])
+        #expect(ClaudeAppUsage.current(usage(7 * 86400 + 1), now: now) == nil)
+    }
+
     @Test func emptyOrGarbledIsNil() {
         for text in ["", "garbled{", "[]", "{}", #"{"version":2}"#, #"{"version":2,"samples":[]}"#,
                      #"{"samples":[{"t":1760960000000,"org":"x"}]}"#, #"{"samples":[{"t":1760960000000,"u":{"oa":1}}]}"#,

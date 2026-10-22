@@ -222,12 +222,25 @@ public struct ClaudeProfiles: Sendable {
     /// that can't be told: never restart it then.
     public func isBusy(_ profile: ClaudeProfile) -> Bool {
         guard let pid = runningByPath()?[profile.dataDir.standardizedFileURL.path]?.pid else { return true }
+        return activity().isBusy(window: pid)
+    }
+
+    /// The data folder of the running profile whose window wrote to that chat at `time` (see `ClaudeActivity.window`).
+    public func window(runningChat id: String, cwd: String?, at time: Date) -> URL? {
+        guard let pid = activity().window(runningChat: id, cwd: cwd, at: time) else { return nil }
+        return running().first { $0.pid == pid }?.dataDir
+    }
+
+    private func activity() -> ClaudeActivity {
         let table = ProcessList.all().compactMap { entry in
-            ProcessList.parent(of: entry.pid).map { ClaudeActivity.Process(pid: entry.pid, parent: $0, path: entry.path) }
+            ProcessList.parent(of: entry.pid).map {
+                ClaudeActivity.Process(pid: entry.pid, parent: $0, path: entry.path, started: ProcessList.startDate(of: entry.pid))
+            }
         }
-        return ClaudeActivity(processes: table, arguments: ProcessList.arguments(of:),
-                              projects: paths.claudeSharedConfigDir.appending(path: "projects", directoryHint: .isDirectory))
-            .isBusy(window: pid)
+        var activity = ClaudeActivity(processes: table, arguments: ProcessList.arguments(of:),
+                                      projects: paths.claudeSharedConfigDir.appending(path: "projects", directoryHint: .isDirectory))
+        activity.workingDirectory = ProcessList.workingDirectory(of:)
+        return activity
     }
 
     public func hasProcesses(_ profile: ClaudeProfile) -> Bool {

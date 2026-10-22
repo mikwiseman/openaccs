@@ -250,6 +250,21 @@ private final class Flag: @unchecked Sendable {
         #expect(UsageSnapshot(windows: [UsageWindow(kind: .fiveHour, usedPercent: 60), UsageWindow(kind: .weekly, usedPercent: 50)], asOf: Date(), source: "").roomLeft == 40)
     }
 
+    @Test func oldNumbersWithoutAResetTimeDontCountForBest() {
+        let now = Date()
+        func claude(_ label: String, used: Double, age: TimeInterval, resets: Date? = nil) -> ControlAccount {
+            ControlAccount(id: UUID(), provider: .claude, label: label, state: .idle,
+                           usage: UsageSnapshot(windows: [UsageWindow(kind: .weekly, usedPercent: used, resetsAt: resets)],
+                                                asOf: now.addingTimeInterval(-age), source: "Claude app"))
+        }
+        let stale = claude("stale", used: 0, age: 3 * 3600), live = claude("live", used: 60, age: 60)
+        #expect(ControlAccount.best(of: .claude, in: [stale, live], now: now)?.label == "live")
+        #expect(ControlAccount.best(of: .claude, in: [stale], now: now) == nil)
+        // An old reading that knows when it resets still counts.
+        let dated = claude("dated", used: 0, age: 3 * 3600, resets: now.addingTimeInterval(86400))
+        #expect(ControlAccount.best(of: .claude, in: [dated, live], now: now)?.label == "dated")
+    }
+
     @Test func withNothingLeftBestIsBackSoonest() {
         let now = Date()
         func empty(_ label: String, back minutes: Double?) -> ControlAccount {

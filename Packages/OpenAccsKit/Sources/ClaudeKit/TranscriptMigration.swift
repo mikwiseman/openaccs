@@ -118,6 +118,25 @@ public enum TranscriptMigration {
     }
 
     /// Regular files below `dir` (relative paths), without entering symlinked folders.
+    /// Changes whenever a file under `projects/` or `file-history/` is added, removed, renamed, resized or
+    /// touched (FNV-1a over every path, size and date): an old folder with the same fingerprint as at its
+    /// last import has nothing new to import.
+    public static func fingerprint(of legacyConfigDir: URL) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        var count = 0
+        for folder in folders {
+            let root = legacyConfigDir.appending(path: folder, directoryHint: .isDirectory)
+            for relative in regularFiles(under: root) {
+                let file = root.appending(path: relative)
+                count += 1
+                for byte in "\(folder)/\(relative)|\(FS.size(file) ?? 0)|\(FS.modificationMicros(file) ?? 0)\n".utf8 {
+                    hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+                }
+            }
+        }
+        return "\(count):\(String(hash, radix: 16))"
+    }
+
     static func regularFiles(under dir: URL) -> [String] {
         var result: [String] = []
         for name in (FS.names(in: dir) ?? []).sorted() {

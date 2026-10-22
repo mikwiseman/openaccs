@@ -9,8 +9,9 @@ public final class FileWatcher: @unchecked Sendable {
     private let continuation: AsyncStream<[String]>.Continuation
     private let queue = DispatchQueue(label: "is.wai.openaccs.fsevents")
 
-    public init(paths: [URL], latency: TimeInterval = 1.5) {
-        (changes, continuation) = AsyncStream<[String]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    /// `keepAll`: deliver every batch of paths (by default only the newest waits while the reader is busy).
+    public init(paths: [URL], latency: TimeInterval = 1.5, keepAll: Bool = false) {
+        (changes, continuation) = AsyncStream<[String]>.makeStream(bufferingPolicy: keepAll ? .unbounded : .bufferingNewest(1))
         var context = FSEventStreamContext(
             version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil
         )

@@ -60,6 +60,9 @@ public struct ClaudeAccountInfo: Codable, Hashable, Sendable {
     public var cliConfigDir: String?
     /// Last account UUID seen for this profile (from Claude's log or card folders; never config.json).
     public var accountUuid: String?
+    /// The old config folder as it was at its last import (`TranscriptMigration.fingerprint`): unchanged
+    /// means nothing new to import.
+    public var importedFingerprint: String?
 
     public init(dataDir: String? = nil, legacyConfigDir: String? = nil, cliConfigDir: String? = nil, accountUuid: String? = nil) {
         self.dataDir = dataDir

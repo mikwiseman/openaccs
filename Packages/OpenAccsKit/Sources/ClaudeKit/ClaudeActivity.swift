@@ -9,12 +9,14 @@ struct ClaudeActivity {
         var pid: pid_t
         var parent: pid_t
         var path: String
+        var started: Date?
     }
 
     var processes: [Process]
     var arguments: (pid_t) -> [String]?
     /// `~/.claude/projects`, where every chat's transcript lives.
     var projects: URL
+    var workingDirectory: (pid_t) -> String? = { _ in nil }
 
     /// Stop reasons that end a turn; anything else (a tool call, no reason yet) means it's still going.
     static let finishedTurns: Set<String> = ["end_turn", "stop_sequence", "max_tokens", "refusal"]
@@ -43,6 +45,34 @@ struct ClaudeActivity {
             guard transcripts?.lastTurn(id) == .finished, transcripts?.agentsWorking(id) == false else { return true }
         }
         return false
+    }
+
+    /// The Claude window (its main app process) whose Claude Code wrote something to chat `id` at `time`.
+    /// Every `claude` process that could have (running that chat, or without an id in `cwd`, a terminal one
+    /// included) and was already running then must sit under that one window; otherwise nil.
+    func window(runningChat id: String, cwd: String?, at time: Date) -> pid_t? {
+        let byPid = Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+        let candidates = processes.filter { process in
+            guard Self.isAnyClaude(process), (process.started ?? .distantPast) <= time else { return false }
+            let session = Self.session(in: arguments(process.pid))
+            return session == id || (session == nil && cwd != nil && workingDirectory(process.pid) == cwd)
+        }
+        let windows = candidates.map { process -> pid_t? in
+            var current = process.parent
+            for _ in 0..<16 {
+                guard let ancestor = byPid[current] else { return nil }
+                if ancestor.path.hasSuffix("/MacOS/Claude") { return ancestor.pid }
+                current = ancestor.parent
+            }
+            return nil
+        }
+        guard let first = windows.first, let window = first, windows.allSatisfy({ $0 == window }) else { return nil }
+        return window
+    }
+
+    /// Any Claude Code CLI: the desktop's, an installed `~/.local/share/claude/versions/<v>`, or one named `claude`.
+    static func isAnyClaude(_ process: Process) -> Bool {
+        isChat(process) || process.path.contains("/.local/share/claude/versions/") || URL(filePath: process.path).lastPathComponent == "claude"
     }
 
     static func isShell(_ process: Process) -> Bool {

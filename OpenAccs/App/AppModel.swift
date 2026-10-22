@@ -55,10 +55,16 @@ final class AppModel: PanelModel {
     private var problems: [UUID: UsageError] = [:]
     private var runningClaude: [String: pid_t] = [:]
     private var pending: [UUID: Pending] = [:]
+    /// When `pending` was counted: a window launched after that may already show it all.
+    private var pendingCountedAt = Date.distantPast
     /// The account each Claude profile's app loaded last, as Claude's log says.
     private var shownAccount: [UUID: String] = [:]
     /// The link of a Claude Code sign-in in progress, to open in another browser window.
     private var signInLinks: [UUID: URL] = [:]
+    /// Limits a chat ran into, by account and window: Claude Code's own refusals, read as they happen.
+    private var limitHits: [UUID: [UsageWindow.Kind: LimitHit]] = [:]
+    private var seenHits: Set<LimitHit> = []
+    private var transcriptWatcher: FileWatcher?
     private var liveCodex: CodexAccountInfo?
     private var lastFetch: [UUID: Date] = [:]
     private var codexAuthDate: Date?
@@ -115,6 +121,7 @@ final class AppModel: PanelModel {
         if !readOnly {
             observeApps()
             watchCards()
+            watchTranscripts()
             await syncClaude()
         }
         await refreshUsage(force: true)
@@ -192,6 +199,39 @@ final class AppModel: PanelModel {
     }
 
     /// Card folders of every profile: a change anywhere means a session to share.
+    /// Claude Code writes a refusal with the exact reset time into a chat that runs into a limit. Read it as
+    /// it happens, while the processes still show which window (account) wrote it; a refusal more than two
+    /// minutes old, or one that more than one window could have written, is left alone.
+    private func watchTranscripts() {
+        guard transcriptWatcher == nil else { return }
+        let projects = paths.claudeSharedConfigDir.appending(path: "projects", directoryHint: .isDirectory)
+        let watcher = FileWatcher(paths: [projects], latency: 2, keepAll: true)
+        transcriptWatcher = watcher
+        Task { [weak self] in
+            for await changed in watcher.changes {
+                await self?.noteLimitHits(in: changed.filter { $0.hasSuffix(".jsonl") })
+            }
+        }
+    }
+
+    private func noteLimitHits(in files: [String]) async {
+        guard !files.isEmpty else { return }
+        let claude = self.claude, seen = seenHits, since = Date().addingTimeInterval(-120)
+        let found = await Task.detached {
+            Set(files).flatMap { LimitHit.read(URL(filePath: $0), since: since) }.filter { !seen.contains($0) }
+                .map { hit in (hit, claude.window(runningChat: hit.sessionId, cwd: hit.cwd, at: hit.at)?.standardizedFileURL.path) }
+        }.value
+        var changed = false
+        // Each refusal is judged once: later, the chat may run in another window.
+        for (hit, dataDir) in found where seenHits.insert(hit).inserted {
+            guard let dataDir, let account = claudeAccounts.first(where: { profile($0)?.dataDir.standardizedFileURL.path == dataDir }),
+                  (limitHits[account.id]?[hit.kind]?.at ?? .distantPast) < hit.at else { continue }
+            limitHits[account.id, default: [:]][hit.kind] = hit
+            changed = true
+        }
+        if changed { rebuild() }
+    }
+
     private func watchCards() {
         watcher?.stop()
         let dirs = claudeAccounts.map { claude.resolve($0.claude!).dataDir.appending(path: "claude-code-sessions", directoryHint: .isDirectory) }
@@ -257,8 +297,13 @@ final class AppModel: PanelModel {
                 scheduleSync()
                 continue
             }
+            // Moved already, and nothing changed in the old folder since the last import: nothing to do.
+            // (Comparing its 2 GB with ~/.claude on every sync kept OpenAccs busy and windows waiting.)
+            let folder = URL(filePath: info.legacyConfigDir ?? info.migratedFrom ?? "", directoryHint: .isDirectory)
+            let fingerprint = await Task.detached { TranscriptMigration.fingerprint(of: folder) }.value
+            if info.legacyConfigDir == nil, info.importedFingerprint == fingerprint { continue }
             do {
-                try await migrateIfNeeded(account.id)
+                try await migrateIfNeeded(account.id, fingerprint: fingerprint)
             } catch {
                 notice = "\(account.label): couldn't move its history into ~/.claude (\(error.localizedDescription)). Nothing was changed in its old folder."
             }
@@ -271,6 +316,7 @@ final class AppModel: PanelModel {
         // until then they only get a preview count, never writes.
         let legacy = claudeAccounts.filter { $0.claude?.legacyConfigDir != nil }.compactMap { a in profile(a).map { (a.id, $0) } }
         let sync = self.sync
+        let counting = Date()
         pending = await Task.detached {
             let plan = try? sync.plan(profiles: profiles, running: running)
             if let plan, !plan.isEmpty { _ = try? sync.apply(plan) }
@@ -286,6 +332,7 @@ final class AppModel: PanelModel {
             }
             return counts
         }.value
+        pendingCountedAt = counting
         noteShownAccounts()
         rebuild()
     }
@@ -313,7 +360,7 @@ final class AppModel: PanelModel {
     }
 
     /// Imports an adopted profile's old history into `~/.claude` (profile must be stopped), then forgets the old folder.
-    private func migrateIfNeeded(_ id: UUID) async throws {
+    private func migrateIfNeeded(_ id: UUID, fingerprint: String) async throws {
         guard let account = accounts.first(where: { $0.id == id }),
               let legacy = account.claude?.legacyConfigDir ?? account.claude?.migratedFrom else { return }
         let firstTime = account.claude?.legacyConfigDir != nil
@@ -326,10 +373,14 @@ final class AppModel: PanelModel {
         // meanwhile (it would be on its old folder), keep it as is; the next stop copies again.
         guard let i = accounts.firstIndex(where: { $0.id == id }) else { return }
         if let p = profile(accounts[i]), claude.mayBeRunning(p) || claude.hasProcesses(p) { return }
-        guard firstTime else { return }
-        accounts[i].claude?.migratedFrom = legacy
-        accounts[i].claude?.legacyConfigDir = nil
+        // Files left out (conflicts) are tried again next time.
+        if report.conflicts.isEmpty { accounts[i].claude?.importedFingerprint = fingerprint }
+        if firstTime {
+            accounts[i].claude?.migratedFrom = legacy
+            accounts[i].claude?.legacyConfigDir = nil
+        }
         save()
+        guard firstTime else { return }
         if !report.conflicts.isEmpty {
             let list = paths.backupsDir.appending(path: "migration-conflicts-\(Int(Date().timeIntervalSince1970)).txt")
             try? AtomicFile.write(Data((["Kept in \(legacy)/projects, differs from ~/.claude/projects:"] + report.conflicts).joined(separator: "\n").utf8), to: list)
@@ -351,9 +402,10 @@ final class AppModel: PanelModel {
             // Claude reads its chat list only at launch. When other windows added or changed chats and nothing
             // works here, a quick restart shows them; otherwise it just comes forward (Restart stays offered).
             // A profile not moved onto ~/.claude yet keeps its transcripts elsewhere: never restarted unasked.
-            await syncClaude()
+            // The counts are kept current by the background syncs; waiting for another one only delays the window.
             let claude = self.claude, window = p
-            if account.claude?.legacyConfigDir == nil, (pending[account.id]?.total ?? 0) > 0,
+            let launched = runningClaude[p.dataDir.standardizedFileURL.path].flatMap { NSRunningApplication(processIdentifier: $0)?.launchDate }
+            if account.claude?.legacyConfigDir == nil, (pending[account.id]?.total ?? 0) > 0, (launched ?? .distantFuture) < pendingCountedAt,
                await !Task.detached(operation: { claude.isBusy(window) }).value {
                 try await quitClaude(p)
             }
@@ -488,7 +540,13 @@ final class AppModel: PanelModel {
         var rows: [PanelRow] = []
         let now = Date()
         for account in accounts {
-            let snapshot = usage[account.id]?.at(now)
+            var snapshot = usage[account.id]?.at(now)
+            if account.provider == .claude {
+                // The Claude app's numbers count for as long as their window lasts; a limit a chat ran into
+                // since then says exactly when it comes back.
+                if let app = snapshot, app.source == ClaudeAppUsage.source { snapshot = ClaudeAppUsage.current(app, now: now) }
+                snapshot = UsageSnapshot.with(Array((limitHits[account.id] ?? [:]).values), on: snapshot, now: now)
+            }
             let problem = problems[account.id]
             var row = PanelRow(
                 id: account.id, provider: account.provider, label: account.label, color: account.color,
@@ -503,10 +561,6 @@ final class AppModel: PanelModel {
                 row.canConnectLimits = account.claude?.cliConfigDir == nil
                 row.hasFolder = true
                 row.signInLink = signInLinks[account.id]
-                if let snapshot, snapshot.source == ClaudeAppUsage.source, now.timeIntervalSince(snapshot.asOf) > ClaudeAppUsage.freshFor {
-                    row.usage = nil
-                    row.error = "Claude app numbers are old"
-                }
                 if let note = accountNote(account) { row.error = note }
             }
             rows.append(row)
@@ -514,7 +568,9 @@ final class AppModel: PanelModel {
         markBest(&rows)
         self.rows = rows
         let claudeRows = rows.filter { $0.provider == .claude }
-        menuBarUsage = (claudeRows.first { $0.id == lastClaude } ?? claudeRows.first { $0.state == .running } ?? claudeRows.first)?.usage
+        // The rings show live numbers only; an old, undated reading draws the "unknown" outline.
+        menuBarUsage = (claudeRows.first { $0.id == lastClaude } ?? claudeRows.first { $0.state == .running } ?? claudeRows.first)?
+            .usage.flatMap { $0.isCurrent(now: now) ? $0 : nil }
     }
 
     private func state(of account: Account, usage: UsageSnapshot?) -> PanelRow.State {
@@ -542,7 +598,9 @@ final class AppModel: PanelModel {
     /// left anywhere, the one back soonest. Same rule as `openaccs best` (`ControlAccount.best`).
     private func markBest(_ rows: inout [PanelRow]) {
         for provider in Provider.allCases {
-            let scored = rows.indices.filter { rows[$0].provider == provider && !rows[$0].needsSignIn }
+            // Hours-old numbers that don't say when they reset can't be compared with live ones.
+            let now = Date()
+            let scored = rows.indices.filter { rows[$0].provider == provider && !rows[$0].needsSignIn && rows[$0].usage?.isCurrent(now: now) == true }
                 .compactMap { i in rows[i].usage?.room.map { (i, $0) } }
             guard scored.count > 1, let best = Room.best(scored) else { continue }
             rows[best].isBest = true

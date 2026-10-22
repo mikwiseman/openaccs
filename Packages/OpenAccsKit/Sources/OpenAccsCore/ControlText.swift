@@ -105,8 +105,15 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
     }
 
     /// The best of `provider`'s working accounts (signed in, with numbers), by the same rule as the panel's ✦.
-    public static func best(of provider: Provider, in accounts: [ControlAccount]) -> ControlAccount? {
-        Room.best(accounts.filter { $0.provider == provider && !$0.needsSignIn }.compactMap { a in a.room.map { (a, $0) } })
+    public static func best(of provider: Provider, in accounts: [ControlAccount], now: Date = Date()) -> ControlAccount? {
+        Room.best(accounts.filter { $0.provider == provider && !$0.needsSignIn && $0.isCurrent(now: now) }.compactMap { a in a.room.map { (a, $0) } })
+    }
+
+    /// False for numbers over 30 minutes old that don't say when any limit resets (the Claude app's own):
+    /// they may be long out of date, so they can't be compared with live ones.
+    public func isCurrent(now: Date) -> Bool {
+        guard let asOf, now.timeIntervalSince(asOf) > 30 * 60 else { return true }
+        return windows.contains { $0.label == nil && $0.resetsAt != nil }
     }
 
     /// Panel order: Claude, Codex, then Limits (Grok, Kimi, Z.ai as added). Row numbers follow it.
@@ -147,6 +154,11 @@ extension ControlAccount {
 }
 
 extension UsageSnapshot {
+    /// See `ControlAccount.isCurrent(now:)`.
+    public func isCurrent(now: Date) -> Bool {
+        now.timeIntervalSince(asOf) <= 30 * 60 || windows.contains { $0.label == nil && $0.resetsAt != nil }
+    }
+
     /// Room left in the tightest main window (100 − the highest used %). nil without main windows.
     public var roomLeft: Double? { room?.left }
 

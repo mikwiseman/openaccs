@@ -48,7 +48,7 @@ Each account row shows how much is left of each limit and when it resets. A full
 
 | Provider | What OpenAccs shows | How you connect it |
 | --- | --- | --- |
-| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, updated every 5 minutes. | [Connect exact limits](#connect-exact-claude-limits) once per account (one sign-in in your browser). Until then OpenAccs shows the numbers the Claude app saves for each profile (`plan-usage-history.json`), but only while they are under 15 minutes old: the app saves them only now and then, so older ones aren't your limits anymore. A row without fresh numbers has a Connect exact limits link. |
+| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, updated every 5 minutes. | [Connect exact limits](#connect-exact-claude-limits) once per account (one sign-in in your browser). Until then OpenAccs shows the numbers the Claude app saves for each profile (`plan-usage-history.json`) with their age. The app saves them only now and then, so a 5-hour number goes once it's 5 hours old (that limit has started over since) and a weekly one after 7 days. When a session runs into a limit, Claude Code notes the exact time it comes back, and OpenAccs shows it under the account whose window ran it. |
 | Codex | What's left of the 5-hour and weekly limits with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
 | Grok | What's left of the weekly limit, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
 | Kimi Code | What's left of the 5-hour, weekly and monthly limits with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |
@@ -228,7 +228,7 @@ No. Codex keeps local history in `~/.codex` for all accounts, and OpenAccs only 
 
 ### How do I see when my Claude 5-hour limit resets?
 
-Click Connect exact limits on the Claude account (or right-click it and choose Connect Exact Limits). After you sign in to Claude Code once, OpenAccs shows your live limits and when they reset, every 5 minutes. Without that step, it shows the Claude app's percentages only while they are fresh, without reset times.
+Click Connect exact limits on the Claude account (or right-click it and choose Connect Exact Limits). After you sign in to Claude Code once, OpenAccs shows your live limits and when they reset, every 5 minutes. Without that step, it shows the Claude app's percentages with their age, and the time a limit comes back once a session runs into it.
 
 ### How do I check my Claude and Codex limits from the terminal?
 
@@ -281,7 +281,7 @@ Yes. OpenAccs is free and open source under the MIT license.
 - Claude sign-in links (Google, SSO and the email link) and notification clicks go to the Claude window that opened first. Use Continue with email and the code when another Claude window is open.
 - Every Claude window has the same icon in the Dock and in the app switcher. Use OpenAccs to pick the right one.
 - Each Claude profile downloads its own Cowork virtual machine of about 12 GB.
-- Without exact limits, Claude numbers come from the Claude app, which saves them only now and then and without reset times. OpenAccs hides them once they are 15 minutes old and offers Connect exact limits instead.
+- Without exact limits, Claude numbers come from the Claude app, which saves them only now and then and without reset times. OpenAccs shows them with their age, and a reset time only after a session runs into that limit.
 - A Codex switch quits and reopens the ChatGPT app. OpenAccs won't switch while a `codex` session runs in Terminal, because that session would keep the old account.
 - OpenAccs switches only Codex sign-ins stored in `~/.codex/auth.json`. It won't switch when Codex keeps its sign-in in the keychain (`cli_auth_credentials_store` in `~/.codex/config.toml`) or in `~/.codex/secrets`.
 - The Grok CLI option relies on an undocumented billing call, so it is experimental.

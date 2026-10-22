@@ -31,6 +31,24 @@ import Testing
         return result
     }
 
+    @Test func fingerprintChangesOnlyWithTheFolder() throws {
+        let home = try TempHome()
+        try home.write("legacy/projects/-p/a.jsonl", "{}\n")
+        try home.write("legacy/file-history/x/1", "v1")
+        let dir = home.url.appending(path: "legacy", directoryHint: .isDirectory)
+        let first = TranscriptMigration.fingerprint(of: dir)
+        #expect(TranscriptMigration.fingerprint(of: dir) == first)
+        try home.write("legacy/projects/-p/a.jsonl", "{}\n{}\n")   // a transcript grew
+        let second = TranscriptMigration.fingerprint(of: dir)
+        #expect(second != first)
+        try home.write("legacy/file-history/x/2", "v2")             // a checkpoint appeared
+        let third = TranscriptMigration.fingerprint(of: dir)
+        #expect(third != second)
+        // A project folder renamed: same count, size and dates, other paths.
+        try FileManager.default.moveItem(at: dir.appending(path: "projects/-p"), to: dir.appending(path: "projects/-q"))
+        #expect(TranscriptMigration.fingerprint(of: dir) != third)
+    }
+
     @Test func importsLegacyHistoryIntoTheSharedFolder() throws {
         let home = try TempHome()
         let legacy = home.url.appending(path: "legacy-cli", directoryHint: .isDirectory)
