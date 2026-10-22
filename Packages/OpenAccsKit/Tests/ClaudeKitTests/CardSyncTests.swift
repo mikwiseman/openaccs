@@ -25,7 +25,7 @@ private var accountBound: [String: Any] { [
 
 private let allowList: Set<String> = [
     "sessionId", "cliSessionId", "cwd", "originCwd", "title", "titleSource", "createdAt", "lastActivityAt",
-    "isArchived", "model", "effort", "permissionMode", "completedTurns",
+    "isArchived", "isStarred", "model", "effort", "permissionMode", "completedTurns",
 ]
 
 /// One Code-tab session: its card file name and its transcript id.
@@ -120,15 +120,15 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(home.names(a) == [s1.file, s2.file].sorted())
         #expect(home.names(b) == [s1.file, s2.file].sorted())
 
-        // A's session in B: file name == sessionId + ".json", only allow-listed fields, bypassPermissions dropped.
+        // A's session in B: file name == sessionId + ".json", only allow-listed fields, the chat's own
+        // permission mode (the same person chose it; dropping it reopened chats in Manual).
         let copyOfS1 = home.json(at: home.cardFile(b, s1))
         #expect(copyOfS1["sessionId"] as? String == s1.sessionId)
-        #expect(Set(copyOfS1.keys) == allowList.subtracting(["permissionMode"]))
-        #expect((copyOfS1 as NSDictionary).isEqual(to: s1.card(title: "From A").filter { $0.key != "permissionMode" }))
+        #expect(Set(copyOfS1.keys) == allowList.subtracting(["isStarred"]))
+        #expect((copyOfS1 as NSDictionary).isEqual(to: s1.card(title: "From A", ["permissionMode": "bypassPermissions"])))
 
-        // B's session in A keeps a safe permission mode.
         let copyOfS2 = home.json(at: home.cardFile(a, s2))
-        #expect(Set(copyOfS2.keys) == allowList)
+        #expect(Set(copyOfS2.keys) == allowList.subtracting(["isStarred"]))
         #expect(copyOfS2["permissionMode"] as? String == "plan")
         #expect(copyOfS2["title"] as? String == "From B")
 
@@ -285,8 +285,8 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(card["title"] as? String == "Ship v2")
         #expect(card["titleSource"] as? String == "user")
         #expect(JSON.double(card["lastActivityAt"]) == 2_000)
-        // Everything else is B's and stays B's.
-        #expect(card["model"] as? String == "sonnet")
+        // Chat settings follow where the chat ran last; everything else is B's and stays B's.
+        #expect(card["model"] as? String == "opus")
         #expect(card["emailAddress"] as? String == "b@example.com")
         #expect(card["worktreePath"] as? String == "/b/wt")
         // The old card is in Backups, byte for byte.
@@ -380,7 +380,7 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
 
         let sync = cardSync(home)
         let plan = try sync.plan(profiles: [a, b, c], running: [])
-        #expect(plan.isEmpty)
+        #expect(plan.operations.isEmpty)
 
         // Even a plan made by hand (or before the link appeared) is refused at apply time.
         let data = Data(#"{"sessionId":"x"}"#.utf8)
@@ -471,6 +471,211 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(card["titleSource"] as? String == "user")
     }
 
+    @Test func pinsAndChatSettingsFollowTheLastChange() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        try home.card(a, s.card(at: 2_000))
+        try home.card(b, s.card(at: 2_000))
+        try home.transcript(s)
+        try sync(home, [a, b])   // both agree: not pinned, acceptEdits, high
+
+        // In B: pinned, switched to Auto and Max (the app rewrites its card).
+        try home.card(b, s.card(at: 2_000, ["isStarred": true, "permissionMode": "auto", "autoChosenInApp": true, "effort": "max"]))
+        try sync(home, [a, b])
+        let inA = home.json(at: home.cardFile(a, s))
+        #expect(inA["isStarred"] as? Bool == true)
+        #expect(inA["permissionMode"] as? String == "auto")
+        #expect(inA["autoChosenInApp"] as? Bool == true)
+        #expect(inA["effort"] as? String == "max")
+
+        // Then unpinned in A: B follows, and nothing else moves back.
+        try home.card(a, inA.merging(["isStarred": false]) { _, new in new })
+        try sync(home, [a, b])
+        let inB = home.json(at: home.cardFile(b, s))
+        #expect(inB["isStarred"] as? Bool == false)
+        #expect(inB["permissionMode"] as? String == "auto")
+        #expect(inB["effort"] as? String == "max")
+        #expect(try sync(home, [a, b]).0.isEmpty)
+    }
+
+    @Test func anOpenWindowKeepsItsCopyUntilItRestartsAndNeverOverrulesTheChange() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        try home.card(a, s.card())
+        let inB = try home.card(b, s.card())
+        try home.transcript(s)
+        try sync(home, [a, b])
+        try home.card(a, s.card(["isStarred": true]))   // pinned in A while B is open
+        let open = [(b, Date())]
+
+        let (plan, _) = try sync(home, [a, b], running: open)
+        #expect(home.json(at: inB)["isStarred"] as? Bool != true)
+        #expect(plan.waiting(in: b.cardsDir!) == 1)
+        // B's old value is not a change of its own: A's pin stays.
+        try sync(home, [a, b], running: open)
+        #expect(home.json(at: home.cardFile(a, s))["isStarred"] as? Bool == true)
+        // B closes: it catches up.
+        try sync(home, [a, b])
+        #expect(home.json(at: inB)["isStarred"] as? Bool == true)
+    }
+
+    @Test func firstSyncKeepsEveryWindowsPinsAndSettingsFromWhereTheChatRanLast() throws {
+        let home = try TempHome()
+        var a = home.profile("A")
+        a.isConfirmed = true
+        let b = home.profile("B")
+        // An account signed in to A before: no window shows its folder now.
+        let old = ClaudeProfile(dataDir: a.dataDir, isDefault: false, accountUuid: "33333333-3333-4333-8333-333333333333", orgUuid: org)
+        let s = Session(), stale = Session()
+        try home.card(a, s.card(at: 1_000, ["isStarred": true, "effort": "high"]))
+        try home.card(b, s.card(at: 2_000, ["effort": "max", "permissionMode": "bypassPermissions"]))
+        let oldS = try home.card(old, s.card(at: 500, ["isStarred": true, "effort": "low"]))
+        // Pinned only in that old folder: a pin from long ago.
+        try home.card(a, stale.card())
+        try home.card(b, stale.card())
+        let oldStale = try home.card(old, stale.card(["isStarred": true]))
+        for x in [s, stale] { try home.transcript(x) }
+        let open = [(a, Date()), (b, Date())]
+
+        let (plan, _) = try sync(home, [a, b], running: open)
+
+        let card = home.json(at: oldS)
+        #expect(card["isStarred"] as? Bool == true)
+        #expect(card["effort"] as? String == "max")
+        #expect(card["permissionMode"] as? String == "bypassPermissions")
+        #expect(home.json(at: oldStale)["isStarred"] as? Bool == false)
+        #expect(plan.waiting(in: a.cardsDir!) == 1)   // effort and mode differ
+        #expect(plan.waiting(in: b.cardsDir!) == 1)   // not pinned yet
+    }
+
+    @Test func everyAccountFolderOfAProfileStaysCompleteEvenWhileItRuns() throws {
+        let home = try TempHome()
+        let b = home.profile("B")
+        var a = home.profile("A")
+        a.isConfirmed = true   // Claude's log says which folder A shows
+        let earlier = ClaudeProfile(dataDir: a.dataDir, isDefault: false, accountUuid: "22222222-2222-4222-8222-222222222222", orgUuid: org)
+        let s = Session(), t = Session()
+        try home.card(a, s.card(title: "Old", at: 1_000))
+        let inEarlier = try home.card(earlier, s.card(title: "Old", at: 1_000))
+        try home.card(b, s.card(title: "New", at: 2_000, ["isStarred": true]))
+        try home.card(b, t.card())
+        for x in [s, t] { try home.transcript(x) }
+        let current = home.cardFile(a, s)
+        let currentBytes = try Data(contentsOf: current)
+
+        let (plan, _) = try sync(home, [a, b], running: [(a, Date())])
+
+        // The account A shows now is loaded: new cards only. The one signed in there before is not.
+        #expect(try Data(contentsOf: current) == currentBytes)
+        #expect(home.json(at: inEarlier)["title"] as? String == "New")
+        #expect(home.json(at: inEarlier)["isStarred"] as? Bool == true)
+        #expect(FS.isRegularFile(home.cardFile(a, t)))
+        #expect(FS.isRegularFile(earlier.cardsDir!.appending(path: t.file)))
+        #expect(plan.waiting(in: a.cardsDir!) == 1)
+        #expect(plan.waiting(in: earlier.cardsDir!) == 0)
+    }
+
+    @Test func whileItRunsAProfileWhoseFolderIsAGuessGetsNewCardsOnly() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")   // no log line: A's folder is a guess
+        let other = ClaudeProfile(dataDir: a.dataDir, isDefault: false, accountUuid: "44444444-4444-4444-8444-444444444444", orgUuid: org)
+        let s = Session(), t = Session()
+        let maybeLoaded = try home.card(other, s.card(title: "Old", at: 1_000))
+        try home.card(a, s.card(title: "Old", at: 1_000))
+        try home.card(b, s.card(title: "New", at: 2_000, ["isStarred": true]))
+        try home.card(b, t.card())
+        for x in [s, t] { try home.transcript(x) }
+        let bytes = try Data(contentsOf: maybeLoaded)
+
+        let (plan, _) = try sync(home, [a, b], running: [(a, Date())])
+
+        #expect(try Data(contentsOf: maybeLoaded) == bytes)
+        #expect(!plan.operations.contains { $0.kind == .update && $0.dataDir == a.dataDir })
+        #expect(plan.operations.filter { $0.dataDir == a.dataDir }.allSatisfy { $0.requiresStopped })
+        #expect(FS.isRegularFile(other.cardsDir!.appending(path: t.file)))   // new cards are still fine
+    }
+
+    @Test func firstSyncAfterUpgradeTrustsClaudesOwnCopyOverAnOldOneOpenAccsMade() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        try home.card(a, s.card(at: 2_000))
+        try home.transcript(s)
+        try sync(home, [a, b])   // B gets OpenAccs's copy
+        // Later, in A: Auto and Max, without a new message. B's copy is written after that (0.2 refreshed it).
+        try home.card(a, s.card(at: 2_000, ["permissionMode": "auto", "autoChosenInApp": true, "effort": "max"]))
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 60)], ofItemAtPath: home.cardFile(b, s).path)
+        // 0.2 kept no merge history.
+        var state = home.syncState
+        state.settings = [:]
+        state.seen = [:]
+        try state.save(to: home.paths.syncStateFile)
+
+        try sync(home, [a, b])
+
+        let copy = home.json(at: home.cardFile(b, s))
+        #expect(copy["permissionMode"] as? String == "auto")
+        #expect(copy["autoChosenInApp"] as? Bool == true)
+        #expect(copy["effort"] as? String == "max")
+        #expect(home.json(at: home.cardFile(a, s))["permissionMode"] as? String == "auto")
+    }
+
+    @Test func aChatMissingFromOneSyncKeepsItsHistory() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        try home.card(a, s.card(["isStarred": true]))
+        try home.card(b, s.card(["isStarred": true]))
+        try home.transcript(s)
+        try sync(home, [a, b])
+        try home.card(a, s.card(["isStarred": false]))   // unpinned in A while B is open
+        let open = [(b, Date())]
+        try sync(home, [a, b], running: open)
+        // For one sync the chat isn't there (its transcript was moved away).
+        let transcript = home.url.appending(path: ".claude/projects/-Users-x-proj/\(s.cli).jsonl")
+        let aside = home.url.appending(path: "aside.jsonl")
+        try FileManager.default.moveItem(at: transcript, to: aside)
+        try sync(home, [a, b], running: open)
+        try FileManager.default.moveItem(at: aside, to: transcript)
+
+        try sync(home, [a, b], running: open)
+
+        #expect(home.json(at: home.cardFile(a, s))["isStarred"] as? Bool == false)
+    }
+
+    @Test func newCopiesKeepTheFlagsThatGoWithTheirMode() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B"), c = home.profile("C")
+        let s = Session()
+        try home.card(a, s.card(["permissionMode": "auto", "autoChosenInApp": true]))
+        try home.transcript(s)
+        try sync(home, [a, b])
+        #expect(home.json(at: home.cardFile(b, s))["autoChosenInApp"] as? Bool == true)
+        // An old copy with the same mode but without the flag, newer on disk, doesn't strip it from the others.
+        try home.card(c, s.card(["permissionMode": "auto"]))
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 60)], ofItemAtPath: home.cardFile(c, s).path)
+        try sync(home, [a, b, c])
+        #expect(home.json(at: home.cardFile(a, s))["autoChosenInApp"] as? Bool == true)
+        #expect(home.json(at: home.cardFile(c, s))["autoChosenInApp"] as? Bool == true)
+    }
+
+    @Test func onlyRealChangesAreBackedUp() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        try home.card(a, s.card(at: 2_000))
+        try home.card(b, s.card(at: 1_000))
+        try home.transcript(s)
+        try sync(home, [a, b])   // B's card only moves on in time: no backup
+        #expect(JSON.double(home.json(at: home.cardFile(b, s))["lastActivityAt"]) == 2_000)
+        #expect(home.backups.isEmpty)
+        try home.card(a, s.card(at: 2_000, ["isStarred": true]))
+        try sync(home, [a, b])   // a pin is a real change: backed up
+        #expect(home.backups.count == 1)
+    }
+
     @Test func pendingCountIsWhatARunningProfileHasNotLoaded() throws {
         let home = try TempHome()
         let a = home.profile("A"), b = home.profile("B")
@@ -495,5 +700,21 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(cardSync(home, running: [(b, relaunched)]).pendingCount(for: b, among: [a, b]) == 1)
         // A profile that is not running loads everything at launch.
         #expect(cardSync(home, running: [(b, relaunched)]).pendingCount(for: a, among: [a, b]) == 0)
+    }
+
+    @Test func aSessionReplacedInAnOlderFolderIsNotPendingForever() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B"), c = home.profile("C")
+        let older = ClaudeProfile(dataDir: b.dataDir, isDefault: false, accountUuid: "55555555-5555-4555-8555-555555555555", orgUuid: org)
+        let s = Session(), next = Session()
+        try home.card(a, s.card())
+        try home.card(b, s.card())
+        // In B's earlier account, s was /clear'ed into `next`.
+        try home.card(older, next.card(["priorCliSessionIds": [s.cli], "preClearCliSessionId": s.cli]))
+        for x in [s, next] { try home.transcript(x) }
+        try FileManager.default.createDirectory(at: c.cardsDir!, withIntermediateDirectories: true)
+        try sync(home, [a, b, c])
+        let relaunched = Date().addingTimeInterval(3600)
+        #expect(cardSync(home, running: [(c, relaunched)]).pendingCount(for: c, among: [a, b, c]) == 0)
     }
 }

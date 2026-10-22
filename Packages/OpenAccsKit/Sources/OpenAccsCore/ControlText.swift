@@ -46,12 +46,34 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
     public var needsSignIn: Bool
     /// Claude: sessions from other profiles this open profile hasn't loaded yet.
     public var pendingSessions: Int
+    /// Claude: chats whose pin or settings changed in another profile, loaded on its next restart.
+    public var pendingChanges: Int
     /// ✦ in the panel: the most left among this provider's accounts.
     public var best: Bool
 
+    /// Older apps don't send `pendingChanges`: an `openaccs` newer than the running app still reads the answer.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        provider = try c.decode(Provider.self, forKey: .provider)
+        label = try c.decode(String.self, forKey: .label)
+        plan = try c.decodeIfPresent(String.self, forKey: .plan)
+        state = try c.decode(State.self, forKey: .state)
+        windows = try c.decode([Window].self, forKey: .windows)
+        credits = try c.decodeIfPresent(Credits.self, forKey: .credits)
+        resetsAvailable = try c.decodeIfPresent(Int.self, forKey: .resetsAvailable)
+        asOf = try c.decodeIfPresent(Date.self, forKey: .asOf)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        needsSignIn = try c.decode(Bool.self, forKey: .needsSignIn)
+        pendingSessions = try c.decode(Int.self, forKey: .pendingSessions)
+        pendingChanges = try c.decodeIfPresent(Int.self, forKey: .pendingChanges) ?? 0
+        best = try c.decode(Bool.self, forKey: .best)
+    }
+
     public init(
         id: UUID, provider: Provider, label: String, plan: String? = nil, state: State, usage: UsageSnapshot? = nil,
-        error: String? = nil, needsSignIn: Bool = false, pendingSessions: Int = 0, best: Bool = false
+        error: String? = nil, needsSignIn: Bool = false, pendingSessions: Int = 0, pendingChanges: Int = 0, best: Bool = false
     ) {
         self.id = id
         self.provider = provider
@@ -66,6 +88,7 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
         self.error = error
         self.needsSignIn = needsSignIn
         self.pendingSessions = pendingSessions
+        self.pendingChanges = pendingChanges
         self.best = best
     }
 
@@ -106,6 +129,20 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         return (try? String(decoding: encoder.encode(value), as: UTF8.self)) ?? "{}"
+    }
+}
+
+extension ControlAccount {
+    /// What an open Claude window loads on its next restart: "3 new sessions", "2 chats changed" or
+    /// "3 new sessions, 2 changed". nil when nothing waits.
+    public static func pendingText(new: Int, changed: Int) -> String? {
+        let sessions = new == 1 ? "1 new session" : "\(new) new sessions"
+        switch (new > 0, changed > 0) {
+        case (true, true): return "\(sessions), \(changed) changed"
+        case (true, false): return sessions
+        case (false, true): return changed == 1 ? "1 chat changed" : "\(changed) chats changed"
+        case (false, false): return nil
+        }
     }
 }
 
@@ -335,9 +372,8 @@ public struct StatusText: Sendable {
         } else if a.windows.isEmpty {
             parts.append(paint("no limits yet", .dim))
         }
-        if a.pendingSessions > 0 {
-            let sessions = a.pendingSessions == 1 ? "1 new session" : "\(a.pendingSessions) new sessions"
-            parts.append(paint(sessions, .yellow) + paint(" · openaccs restart \(number)", .dim))
+        if let waiting = ControlAccount.pendingText(new: a.pendingSessions, changed: a.pendingChanges) {
+            parts.append(paint(waiting, .yellow) + paint(" · openaccs restart \(number)", .dim))
         }
         if let n = a.resetsAvailable, n > 0 { parts.append(paint(n == 1 ? "1 reset left" : "\(n) resets left", .dim)) }
         if let c = a.credits { parts.append(paint(Self.credits(c), .dim)) }

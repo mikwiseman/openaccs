@@ -54,7 +54,9 @@ final class AppModel: PanelModel {
     private var usage: [UUID: UsageSnapshot] = [:]
     private var problems: [UUID: UsageError] = [:]
     private var runningClaude: [String: pid_t] = [:]
-    private var pending: [UUID: Int] = [:]
+    private var pending: [UUID: Pending] = [:]
+    /// The account each Claude profile's app loaded last, as Claude's log says.
+    private var shownAccount: [UUID: String] = [:]
     private var liveCodex: CodexAccountInfo?
     private var lastFetch: [UUID: Date] = [:]
     private var codexAuthDate: Date?
@@ -268,21 +270,44 @@ final class AppModel: PanelModel {
         let legacy = claudeAccounts.filter { $0.claude?.legacyConfigDir != nil }.compactMap { a in profile(a).map { (a.id, $0) } }
         let sync = self.sync
         pending = await Task.detached {
-            if let plan = try? sync.plan(profiles: profiles, running: running), !plan.isEmpty {
-                _ = try? sync.apply(plan)
-            }
-            var counts: [UUID: Int] = [:]
+            let plan = try? sync.plan(profiles: profiles, running: running)
+            if let plan, !plan.isEmpty { _ = try? sync.apply(plan) }
+            var counts: [UUID: Pending] = [:]
             for (account, profile) in zip(shared, profiles) {
-                counts[account.id] = sync.pendingCount(for: profile, among: profiles)
+                counts[account.id] = Pending(new: sync.pendingCount(for: profile, among: profiles),
+                                             changed: profile.cardsDir.flatMap { plan?.waiting(in: $0) } ?? 0)
             }
             let runningPaths = Set(running.map(\.standardizedFileURL.path))
             for (id, profile) in legacy where runningPaths.contains(profile.dataDir.standardizedFileURL.path) {
                 let preview = try? sync.plan(profiles: profiles + [profile], running: running)
-                counts[id] = max(1, preview?.count(.create, for: profile.dataDir) ?? 1)
+                counts[id] = Pending(new: max(1, preview?.count(.create, for: profile.dataDir) ?? 1))
             }
             return counts
         }.value
+        noteShownAccounts()
         rebuild()
+    }
+
+    /// Which account each profile's app shows. A profile remembers the first one it is seen with, so a
+    /// window signed in to another account later says so instead of passing for the old one.
+    private func noteShownAccounts() {
+        var learned = false
+        for account in claudeAccounts {
+            guard let info = account.claude, let shown = claude.loggedAccount(info) else { continue }
+            shownAccount[account.id] = shown
+            if info.accountUuid == nil, let i = accounts.firstIndex(where: { $0.id == account.id }) {
+                accounts[i].claude?.accountUuid = shown
+                learned = true
+            }
+        }
+        if learned { save() }
+    }
+
+    /// "Signed in as ai42@…" when a profile's app shows another account than the one it was added with.
+    private func accountNote(_ account: Account) -> String? {
+        guard let expected = account.claude?.accountUuid, let shown = shownAccount[account.id], shown != expected else { return nil }
+        let other = claudeAccounts.first { $0.id != account.id && $0.claude?.accountUuid == shown }
+        return other.map { "Signed in as \($0.label)" } ?? "Signed in as another account"
     }
 
     /// Imports an adopted profile's old history into `~/.claude` (profile must be stopped), then forgets the old folder.
@@ -320,6 +345,17 @@ final class AppModel: PanelModel {
     private func openClaude(_ account: Account) async throws {
         guard var p = profile(account) else { return }
         refreshRunning()
+        if isRunning(p) {
+            // Claude reads its chat list only at launch. When other windows added or changed chats and nothing
+            // works here, a quick restart shows them; otherwise it just comes forward (Restart stays offered).
+            // A profile not moved onto ~/.claude yet keeps its transcripts elsewhere: never restarted unasked.
+            await syncClaude()
+            let claude = self.claude, window = p
+            if account.claude?.legacyConfigDir == nil, (pending[account.id]?.total ?? 0) > 0,
+               await !Task.detached(operation: { claude.isBusy(window) }).value {
+                try await quitClaude(p)
+            }
+        }
         if !isRunning(p) {
             // The sync migrates this profile first if it still uses its old config folder.
             openingNow.insert(account.id)
@@ -459,9 +495,12 @@ final class AppModel: PanelModel {
                 needsSignIn: problem == .needsSignIn
             )
             if account.provider == .claude {
-                row.pendingSessions = (profile(account).map(isRunning) ?? false) ? pending[account.id] ?? 0 : 0
+                let waiting = (profile(account).map(isRunning) ?? false) ? pending[account.id] ?? Pending() : Pending()
+                row.pendingSessions = waiting.new
+                row.pendingChanges = waiting.changed
                 row.canConnectLimits = account.claude?.cliConfigDir == nil
                 row.hasFolder = true
+                if let note = accountNote(account) { row.error = note }
             }
             rows.append(row)
         }
@@ -530,12 +569,16 @@ final class AppModel: PanelModel {
     func restart(_ id: UUID) async throws {
         guard let account = accounts.first(where: { $0.id == id }), let p = profile(account) else { return }
         try await exclusively(account) {
-            guard await claude.quit(p, timeout: .seconds(30)) else { throw AppError.claudeWontQuit }
-            // Its bundled Claude Code processes may still be writing transcripts for a moment.
-            for _ in 0..<100 where claude.hasProcesses(p) { try? await Task.sleep(for: .milliseconds(100)) }
-            refreshRunning()
+            try await quitClaude(p)
             try await openClaude(account)
         }
+    }
+
+    private func quitClaude(_ p: ClaudeProfile) async throws {
+        guard await claude.quit(p, timeout: .seconds(30)) else { throw AppError.claudeWontQuit }
+        // Its bundled Claude Code processes may still be writing transcripts for a moment.
+        for _ in 0..<100 where claude.hasProcesses(p) { try? await Task.sleep(for: .milliseconds(100)) }
+        refreshRunning()
     }
 
     func connectExactLimits(_ id: UUID) async throws {
@@ -729,6 +772,16 @@ final class AppModel: PanelModel {
     nonisolated static func same(_ a: CodexAccountInfo, _ b: CodexAccountInfo) -> Bool {
         a.userId == b.userId && a.accountId == b.accountId
     }
+}
+
+/// What an open Claude window would load on a restart.
+struct Pending: Equatable, Sendable {
+    /// Sessions it has no card for (or got one after it launched).
+    var new = 0
+    /// Chats whose pin, archive, permission mode, effort or model changed in another window.
+    var changed = 0
+
+    var total: Int { new + changed }
 }
 
 enum AppError: LocalizedError {

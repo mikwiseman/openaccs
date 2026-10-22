@@ -57,10 +57,16 @@ import Testing
         try FileManager.default.createDirectory(at: data.appending(path: "claude-code-sessions/\(acct)/\(orgB)"), withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1000)], ofItemAtPath: old.path)
 
-        let profile = ClaudeProfiles(paths: home.paths, processes: { [] }).resolve(ClaudeAccountInfo(dataDir: data.path, accountUuid: acct))
+        let profiles = ClaudeProfiles(paths: home.paths, processes: { [] })
 
-        #expect(profile.accountUuid == acct2)
-        #expect(profile.orgUuid == orgB)
+        // OpenAccs keeps every account folder current, so the account the profile was added with comes first...
+        let stored = profiles.resolve(ClaudeAccountInfo(dataDir: data.path, accountUuid: acct))
+        #expect(stored.accountUuid == acct && stored.orgUuid == orgA)
+        // ...and without one, the folder with the newest card.
+        let unknown = profiles.resolve(ClaudeAccountInfo(dataDir: data.path))
+        #expect(unknown.accountUuid == acct2)
+        #expect(unknown.orgUuid == orgB)
+        #expect(profiles.loggedAccount(ClaudeAccountInfo(dataDir: data.path)) == nil)
     }
 
     @Test func fallsBackToTheStoredAccountWhenNoCardSaysMore() throws {

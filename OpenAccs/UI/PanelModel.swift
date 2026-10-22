@@ -64,6 +64,8 @@ struct PanelRow: Identifiable, Hashable {
     var needsSignIn: Bool = false
     /// Claude: sessions from other profiles this running profile hasn't loaded yet.
     var pendingSessions: Int = 0
+    /// Claude: chats whose pin or settings changed elsewhere, shown here after a restart.
+    var pendingChanges: Int = 0
     /// Most room left among this provider's accounts.
     var isBest: Bool = false
     /// Claude account whose exact limits aren't connected yet.

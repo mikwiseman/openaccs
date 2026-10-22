@@ -102,7 +102,7 @@ final class DemoModel: PanelModel {
                         UsageWindow(kind: .fiveHour, usedPercent: 64, resetsAt: inMinutes(14)),
                         UsageWindow(kind: .weekly, usedPercent: 100, resetsAt: sat),
                     ], source: "Claude Code"),
-                    pendingSessions: 1, hasFolder: true
+                    pendingSessions: 1, pendingChanges: 2, hasFolder: true
                 ),
                 PanelRow(
                     id: UUID(), provider: .claude, label: "Old login", color: 7, plan: "Max", state: .idle,

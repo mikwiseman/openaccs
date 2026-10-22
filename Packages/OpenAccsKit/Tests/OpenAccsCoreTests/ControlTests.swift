@@ -378,6 +378,20 @@ private final class Flag: @unchecked Sendable {
         #expect(out.contains("\u{1B}[1mClaude\u{1B}[0m"))
     }
 
+    @Test func answersFromAnOlderAppStillDecode() throws {
+        let old = #"{"id":"\#(UUID().uuidString)","provider":"claude","label":"me","state":"open","windows":[],"needsSignIn":false,"pendingSessions":2,"best":false}"#
+        let account = try JSONDecoder().decode(ControlAccount.self, from: Data(old.utf8))
+        #expect(account.pendingSessions == 2 && account.pendingChanges == 0)
+    }
+
+    @Test func whatARestartWouldLoad() {
+        #expect(ControlAccount.pendingText(new: 0, changed: 0) == nil)
+        #expect(ControlAccount.pendingText(new: 1, changed: 0) == "1 new session")
+        #expect(ControlAccount.pendingText(new: 0, changed: 1) == "1 chat changed")
+        #expect(ControlAccount.pendingText(new: 0, changed: 4) == "4 chats changed")
+        #expect(ControlAccount.pendingText(new: 3, changed: 2) == "3 new sessions, 2 changed")
+    }
+
     @Test func remainingWords() {
         func w(_ used: Double) -> ControlAccount.Window { .init(UsageWindow(kind: .fiveHour, usedPercent: used)) }
         #expect(StatusText.left(w(38)) == " 62% left")
@@ -419,7 +433,7 @@ private final class Flag: @unchecked Sendable {
         let json = ControlAccount.json(Array(accounts.prefix(1)))
         let root = try #require(JSON.object(Data(json.utf8)))
         let account = try #require((root["accounts"] as? [[String: Any]])?.first)
-        #expect(Set(account.keys) == ["id", "provider", "label", "plan", "state", "windows", "asOf", "source", "needsSignIn", "pendingSessions", "best"])
+        #expect(Set(account.keys) == ["id", "provider", "label", "plan", "state", "windows", "asOf", "source", "needsSignIn", "pendingSessions", "pendingChanges", "best"])
         #expect(account["state"] as? String == "open")
         #expect(account["provider"] as? String == "claude")
         let windows = try #require(account["windows"] as? [[String: Any]])

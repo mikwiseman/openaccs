@@ -29,8 +29,11 @@ Every profile that OpenAccs opens uses the same `~/.claude` folder. Claude Code 
 
 The Code tab in the Claude app lists only the sessions of the account that is signed in. OpenAccs adds each session to the Code tab of your other profiles, so you can start a task on one account and continue it on another when the first account reaches its limit.
 
-- A profile that is closed shows the new sessions the next time it opens.
-- A profile that is open loads them after a restart. OpenAccs shows "3 new sessions" and a Restart link on that account.
+- Pins, archived sessions, the permission mode, the effort and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
+- Every account you have signed in to in a window gets the same list, so signing in to another account inside one window shows the same sessions too.
+- A profile that is closed shows everything the next time it opens.
+- A profile that is open reads its session list only when it starts. When you switch to it from OpenAccs and nothing is running in it, OpenAccs restarts it so it shows the latest list. While a session is working there, OpenAccs only brings it forward and shows what's waiting, like "3 new sessions, 2 changed", with a Restart link.
+- If a window is now signed in to another account than the one you added it with, the row says so, for example "Signed in as ai42@waiwai.is".
 - A session you delete in one account is not added back to the others.
 
 ### Switch Codex accounts in the ChatGPT app and the codex CLI
@@ -269,7 +272,7 @@ Yes. OpenAccs is free and open source under the MIT license.
 
 ## Limitations
 
-- A Claude window that is already open shows sessions from your other accounts only after it restarts. OpenAccs shows how many sessions are waiting, with a Restart link.
+- A Claude window that is already open shows changes from your other windows only after it restarts. OpenAccs restarts it for you when you switch to it and nothing runs in it; otherwise it shows what's waiting, with a Restart link.
 - Don't continue the same session in two Claude windows at once. Both windows write to the same transcript, and the conversation splits into two.
 - Claude sign-in links (Google, SSO and the email link) and notification clicks go to the Claude window that opened first. Use Continue with email and the code when another Claude window is open.
 - Every Claude window has the same icon in the Dock and in the app switcher. Use OpenAccs to pick the right one.

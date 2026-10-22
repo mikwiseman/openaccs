@@ -148,14 +148,15 @@ struct AccountRow: View {
             .captionStyle()
         } else {
             let notes = notes
-            if row.pendingSessions > 0 || !notes.isEmpty || row.error != nil {
+            let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges)
+            if waiting != nil || !notes.isEmpty || row.error != nil {
                 HStack(spacing: 0) {
                     if let error = row.error {
                         Text(error).foregroundStyle(.secondary).allowsHitTesting(false)
-                        if row.pendingSessions > 0 || !notes.isEmpty { separator }
+                        if waiting != nil || !notes.isEmpty { separator }
                     }
-                    if row.pendingSessions > 0 {
-                        Text(row.pendingSessions == 1 ? "1 new session" : "\(row.pendingSessions) new sessions")
+                    if let waiting {
+                        Text(waiting)
                             .foregroundStyle(.secondary)
                             .allowsHitTesting(false)
                         Text(" ").allowsHitTesting(false)
@@ -276,7 +277,8 @@ struct AccountRow: View {
         case .codex where row.state != .active:
             confirm = .switchCodex
         case .claude:
-            run(row.state == .running ? "Switching…" : "Opening Claude…") { try await model.open(row.id) }
+            let refreshes = row.state == .running && row.pendingSessions + row.pendingChanges > 0
+            run(refreshes ? "Refreshing Claude…" : row.state == .running ? "Switching…" : "Opening Claude…") { try await model.open(row.id) }
         default:
             run("Opening…") { try await model.open(row.id) }
         }
@@ -328,9 +330,7 @@ struct AccountRow: View {
         for w in meters { parts.append("\(UsageText.spokenWindow(w)), \(UsageText.spoken(w, now: now))") }
         if row.needsSignIn { parts.append(signedOutNote + (usesKey ? "" : ", sign in again")) }
         else if let error = row.error { parts.append(error) }
-        if row.pendingSessions > 0 {
-            parts.append(row.pendingSessions == 1 ? "1 new session" : "\(row.pendingSessions) new sessions")
-        }
+        if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) { parts.append(waiting) }
         if !notes.isEmpty { parts.append(notes.replacingOccurrences(of: "  ·  ", with: ", ")) }
         return parts.joined(separator: ", ")
     }

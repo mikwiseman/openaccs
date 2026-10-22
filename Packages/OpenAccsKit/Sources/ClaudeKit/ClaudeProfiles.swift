@@ -11,12 +11,16 @@ public struct ClaudeProfile: Sendable, Hashable {
     public var orgUuid: String?
     /// `dataDir/claude-code-sessions/<acct>/<org>`: the Code-tab cards the app loads. nil when unknown.
     public var cardsDir: URL?
+    /// Claude's log named this folder. Otherwise it's a guess, and while the app runs any of the profile's
+    /// folders may be the one it has loaded.
+    public var isConfirmed: Bool
 
-    public init(dataDir: URL, isDefault: Bool, accountUuid: String? = nil, orgUuid: String? = nil) {
+    public init(dataDir: URL, isDefault: Bool, accountUuid: String? = nil, orgUuid: String? = nil, isConfirmed: Bool = false) {
         self.dataDir = dataDir
         self.isDefault = isDefault
         self.accountUuid = accountUuid
         self.orgUuid = orgUuid
+        self.isConfirmed = isConfirmed
         if let accountUuid, let orgUuid {
             cardsDir = dataDir.appending(path: "claude-code-sessions/\(accountUuid)/\(orgUuid)", directoryHint: .isDirectory)
         }
@@ -98,21 +102,42 @@ public struct ClaudeProfiles: Sendable {
     // MARK: Resolve
 
     /// The folder plus the account and org it shows: the `<acct>/<org>` card folder the app loaded last
-    /// (main.log), else the one holding the newest card, else the stored account. Never reads
-    /// `config.json`: it holds Claude's login caches.
+    /// (main.log), else a folder of the stored account, else the one holding the newest card (OpenAccs
+    /// fills every account folder, so a card's age alone no longer tells). Never reads `config.json`:
+    /// it holds Claude's login caches.
     public func resolve(_ info: ClaudeAccountInfo) -> ClaudeProfile {
-        let dataDir = info.dataDir.map { URL(filePath: $0, directoryHint: .isDirectory).standardizedFileURL } ?? paths.claudeDefaultDataDir
+        let dataDir = dataDir(of: info)
         let isDefault = Self.samePath(dataDir, paths.claudeDefaultDataDir)
         if let logged = loggedFolder(dataDir: dataDir) {
-            return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: logged.account, orgUuid: logged.org)
+            return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: logged.account, orgUuid: logged.org, isConfirmed: true)
         }
         let folders = cardFolders(dataDir: dataDir)
-        if let newest = folders.max(by: { ($0.newestCard ?? .distantPast) < ($1.newestCard ?? .distantPast) }), newest.newestCard != nil {
-            return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: newest.account, orgUuid: newest.org)
-        }
         let account = info.accountUuid.flatMap { FS.isSafeName($0) ? $0 : nil }
-        let org = folders.first { $0.account == account }?.org
-        return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: account, orgUuid: org)
+        let stored = folders.filter { $0.account == account }
+        if let folder = (stored.isEmpty ? folders.filter { $0.newestCard != nil } : stored)
+            .max(by: { ($0.newestCard ?? .distantPast) < ($1.newestCard ?? .distantPast) }) {
+            return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: folder.account, orgUuid: folder.org)
+        }
+        return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: account, orgUuid: nil)
+    }
+
+    /// The account the profile's app loaded last, as Claude's log says. nil when the log doesn't say.
+    public func loggedAccount(_ info: ClaudeAccountInfo) -> String? {
+        loggedFolder(dataDir: dataDir(of: info))?.account
+    }
+
+    private func dataDir(of info: ClaudeAccountInfo) -> URL {
+        info.dataDir.map { URL(filePath: $0, directoryHint: .isDirectory).standardizedFileURL } ?? paths.claudeDefaultDataDir
+    }
+
+    /// The card folders a profile holds: the one its app shows now (first, when known) and one per account
+    /// signed in there before. The app reads a folder again whenever that account signs in.
+    public func folders(of profile: ClaudeProfile) -> [ClaudeProfile] {
+        var result = profile.cardsDir == nil ? [] : [profile]
+        for folder in cardFolders(dataDir: profile.dataDir) where folder.account != profile.accountUuid || folder.org != profile.orgUuid {
+            result.append(ClaudeProfile(dataDir: profile.dataDir, isDefault: profile.isDefault, accountUuid: folder.account, orgUuid: folder.org))
+        }
+        return result
     }
 
     /// `<acct>/<org>` of the latest `Loaded N persisted sessions from <dataDir>/claude-code-sessions/<acct>/<org>`
@@ -193,6 +218,18 @@ public struct ClaudeProfiles: Sendable {
 
     /// Any process still running from inside the profile's folder, such as its bundled Claude Code CLIs,
     /// which can keep writing transcripts for a moment after the app itself has quit.
+    /// True while the profile's window has a Claude Code chat mid-turn or running a command, or when
+    /// that can't be told: never restart it then.
+    public func isBusy(_ profile: ClaudeProfile) -> Bool {
+        guard let pid = runningByPath()?[profile.dataDir.standardizedFileURL.path]?.pid else { return true }
+        let table = ProcessList.all().compactMap { entry in
+            ProcessList.parent(of: entry.pid).map { ClaudeActivity.Process(pid: entry.pid, parent: $0, path: entry.path) }
+        }
+        return ClaudeActivity(processes: table, arguments: ProcessList.arguments(of:),
+                              projects: paths.claudeSharedConfigDir.appending(path: "projects", directoryHint: .isDirectory))
+            .isBusy(window: pid)
+    }
+
     public func hasProcesses(_ profile: ClaudeProfile) -> Bool {
         let root = profile.dataDir.standardizedFileURL.path + "/"
         return ProcessList.all().contains { $0.path.hasPrefix(root) }

@@ -135,7 +135,7 @@ final class ControlHandler {
         }
         return ControlAccount(id: row.id, provider: row.provider, label: row.label, plan: row.plan, state: state,
                               usage: row.usage, error: row.error, needsSignIn: row.needsSignIn,
-                              pendingSessions: row.pendingSessions, best: row.isBest)
+                              pendingSessions: row.pendingSessions, pendingChanges: row.pendingChanges, best: row.isBest)
     }
 
     private struct Failure: LocalizedError {
