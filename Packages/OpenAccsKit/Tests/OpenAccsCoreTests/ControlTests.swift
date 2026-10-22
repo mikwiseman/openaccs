@@ -261,6 +261,8 @@ private final class Flag: @unchecked Sendable {
         let unknown = empty("unknown", back: nil), late = empty("late", back: 180), soon = empty("soon", back: 20)
         #expect(ControlAccount.best(of: .claude, in: [unknown, late, soon])?.label == "soon")
         #expect(ControlAccount.best(of: .claude, in: [unknown, late])?.label == "late")
+        // All out and none says when it's back: no account is the best one.
+        #expect(ControlAccount.best(of: .claude, in: [unknown, empty("also unknown", back: nil)]) == nil)
         // Any room at all beats waiting.
         #expect(ControlAccount.best(of: .claude, in: [soon, account(.claude, "some", used: [99, 0])])?.label == "some")
         // Both windows empty: back when the later one refills.

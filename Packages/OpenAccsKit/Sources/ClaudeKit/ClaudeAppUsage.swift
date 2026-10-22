@@ -4,6 +4,11 @@ import OpenAccsCore
 /// Usage the Claude desktop app records in `<dataDir>/plan-usage-history.json` while it runs.
 /// Credential-free; percentages only, no reset times.
 public enum ClaudeAppUsage {
+    /// `UsageSnapshot.source` of these numbers.
+    public static let source = "Claude app"
+    /// The app writes its numbers only now and then (at launch and quit): older ones aren't today's limits.
+    public static let freshFor: TimeInterval = 15 * 60
+
     public static func read(profile: ClaudeProfile) -> UsageSnapshot? {
         guard let data = try? Data(contentsOf: profile.dataDir.appending(path: "plan-usage-history.json")) else { return nil }
         return parse(data, org: profile.orgUuid)
@@ -21,6 +26,6 @@ public enum ClaudeAppUsage {
             JSON.double(u[key]).map { UsageWindow(kind: kind, label: label, usedPercent: $0) }
         }
         guard !windows.isEmpty else { return nil }
-        return UsageSnapshot(windows: windows, asOf: JSON.epoch(t), source: "Claude app")
+        return UsageSnapshot(windows: windows, asOf: JSON.epoch(t), source: source)
     }
 }

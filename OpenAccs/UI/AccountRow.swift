@@ -149,9 +149,20 @@ struct AccountRow: View {
         } else {
             let notes = notes
             let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges)
-            if waiting != nil || !notes.isEmpty || row.error != nil {
+            // No numbers worth showing: the way to live ones (Anthropic's CLI, one browser sign-in).
+            let offerLive = row.provider == .claude && row.canConnectLimits && row.usage == nil
+            if offerLive {
                 HStack(spacing: 0) {
-                    if let error = row.error {
+                    Text(row.error ?? "No limits yet").foregroundStyle(.secondary).allowsHitTesting(false)
+                    separator
+                    Button("Connect exact limits", action: connectLimits).buttonStyle(.inlineLink)
+                }
+                .captionStyle()
+            }
+            let error = offerLive ? nil : row.error
+            if waiting != nil || !notes.isEmpty || error != nil {
+                HStack(spacing: 0) {
+                    if let error {
                         Text(error).foregroundStyle(.secondary).allowsHitTesting(false)
                         if waiting != nil || !notes.isEmpty { separator }
                     }

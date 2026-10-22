@@ -48,7 +48,7 @@ Each account row shows how much is left of each limit and when it resets. A full
 
 | Provider | What OpenAccs shows | How you connect it |
 | --- | --- | --- |
-| Claude | What's left of the 5-hour and weekly limits. After you connect exact limits, it also shows reset times, your plan and extra usage spend. | Nothing to set up. OpenAccs reads the usage file (`plan-usage-history.json`) that the Claude app writes for each profile, with no sign-in. For reset times, [connect Claude Code once](#connect-exact-claude-limits). |
+| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, updated every 5 minutes. | [Connect exact limits](#connect-exact-claude-limits) once per account (one sign-in in your browser). Until then OpenAccs shows the numbers the Claude app saves for each profile (`plan-usage-history.json`), but only while they are under 15 minutes old: the app saves them only now and then, so older ones aren't your limits anymore. A row without fresh numbers has a Connect exact limits link. |
 | Codex | What's left of the 5-hour and weekly limits with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
 | Grok | What's left of the weekly limit, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
 | Kimi Code | What's left of the 5-hour, weekly and monthly limits with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |
@@ -224,7 +224,7 @@ No. Codex keeps local history in `~/.codex` for all accounts, and OpenAccs only 
 
 ### How do I see when my Claude 5-hour limit resets?
 
-Right-click the Claude account and choose Connect Exact Limits. After you sign in to Claude Code once, OpenAccs shows when the 5-hour and weekly limits reset. Without that step, it shows the percentages from the Claude app without reset times.
+Click Connect exact limits on the Claude account (or right-click it and choose Connect Exact Limits). After you sign in to Claude Code once, OpenAccs shows your live limits and when they reset, every 5 minutes. Without that step, it shows the Claude app's percentages only while they are fresh, without reset times.
 
 ### How do I check my Claude and Codex limits from the terminal?
 
@@ -277,7 +277,7 @@ Yes. OpenAccs is free and open source under the MIT license.
 - Claude sign-in links (Google, SSO and the email link) and notification clicks go to the Claude window that opened first. Use Continue with email and the code when another Claude window is open.
 - Every Claude window has the same icon in the Dock and in the app switcher. Use OpenAccs to pick the right one.
 - Each Claude profile downloads its own Cowork virtual machine of about 12 GB.
-- Without exact limits, Claude numbers update only while that profile is open, and they have no reset times. A row shows "as of 2h ago" when its numbers are old.
+- Without exact limits, Claude numbers come from the Claude app, which saves them only now and then and without reset times. OpenAccs hides them once they are 15 minutes old and offers Connect exact limits instead.
 - A Codex switch quits and reopens the ChatGPT app. OpenAccs won't switch while a `codex` session runs in Terminal, because that session would keep the old account.
 - OpenAccs switches only Codex sign-ins stored in `~/.codex/auth.json`. It won't switch when Codex keeps its sign-in in the keychain (`cli_auth_credentials_store` in `~/.codex/config.toml`) or in `~/.codex/secrets`.
 - The Grok CLI option relies on an undocumented billing call, so it is experimental.

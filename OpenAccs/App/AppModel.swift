@@ -414,7 +414,7 @@ final class AppModel: PanelModel {
     /// How often each source is worth asking (local files often, network and CLIs rarely).
     private func isDue(_ account: Account) -> Bool {
         let interval: TimeInterval = switch account.provider {
-        case .claude: account.claude?.cliConfigDir == nil ? 60 : 600
+        case .claude: account.claude?.cliConfigDir == nil ? 60 : 300
         case .grok: account.grok?.source == .grokBot ? 60 : 900
         case .codex, .kimi, .zai: 300
         }
@@ -500,6 +500,10 @@ final class AppModel: PanelModel {
                 row.pendingChanges = waiting.changed
                 row.canConnectLimits = account.claude?.cliConfigDir == nil
                 row.hasFolder = true
+                if let snapshot, snapshot.source == ClaudeAppUsage.source, now.timeIntervalSince(snapshot.asOf) > ClaudeAppUsage.freshFor {
+                    row.usage = nil
+                    row.error = "Claude app numbers are old"
+                }
                 if let note = accountNote(account) { row.error = note }
             }
             rows.append(row)

@@ -258,7 +258,9 @@ private struct Command {
 
     static func best(_ provider: Provider, in accounts: [ControlAccount]) throws -> ControlAccount {
         guard let best = ControlAccount.best(of: provider, in: accounts) else {
-            throw Failure.error("No \(provider.displayName) account has limits to compare yet.")
+            let empty = accounts.contains { $0.provider == provider && !$0.needsSignIn && $0.room != nil }
+            throw Failure.error(empty ? "Every \(provider.displayName) account is out, and none says when it's back."
+                                      : "No \(provider.displayName) account has limits to compare yet.")
         }
         return best
     }

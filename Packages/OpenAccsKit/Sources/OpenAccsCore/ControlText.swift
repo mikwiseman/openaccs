@@ -171,12 +171,14 @@ public struct Room: Sendable, Equatable {
         backAt = !empty.isEmpty && resets.count == empty.count ? resets.max() : nil
     }
 
-    /// The most left wins; with nothing left anywhere, the one back soonest. Ties go to the first.
+    /// The most left wins; with nothing left anywhere, the one back soonest. Ties go to the first. None when
+    /// nothing is left and no account says when it's back: then no account is better than another.
     public static func best<T>(_ scored: [(T, Room)]) -> T? {
-        scored.reduce(nil as (T, Room)?) { best, next in
+        guard let winner = scored.reduce(nil as (T, Room)?, { best, next in
             guard let best else { return next }
             return next.1.beats(best.1) ? next : best
-        }?.0
+        }) else { return nil }
+        return winner.1.left <= 0 && winner.1.backAt == nil ? nil : winner.0
     }
 
     private func beats(_ other: Room) -> Bool {
