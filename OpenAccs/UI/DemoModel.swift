@@ -97,6 +97,14 @@ final class DemoModel: PanelModel {
                     usage: nil, error: "Open this profile once to see limits", canConnectLimits: true, hasFolder: true
                 ),
                 PanelRow(
+                    id: UUID(), provider: .claude, label: "night@example.com", color: 7, plan: nil, state: .idle,
+                    usage: usage(nil, [
+                        UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: nil),
+                        UsageWindow(kind: .weekly, usedPercent: 34, resetsAt: nil),
+                    ]),
+                    canConnectLimits: true, hasFolder: true
+                ),
+                PanelRow(
                     id: UUID(), provider: .claude, label: "Lab", color: 6, plan: "Pro", state: .running,
                     usage: usage("Pro", [
                         UsageWindow(kind: .fiveHour, usedPercent: 64, resetsAt: inMinutes(14)),
@@ -149,8 +157,12 @@ final class DemoModel: PanelModel {
     }
 
     func connectExactLimits(_ id: UUID) async throws {
+        update(id) { $0.signInLink = URL(string: "https://claude.com/cai/oauth/authorize?code=true") }
         try await Task.sleep(for: .seconds(2))
-        update(id) { $0.canConnectLimits = false }
+        update(id) {
+            $0.signInLink = nil
+            $0.canConnectLimits = false
+        }
     }
 
     func rename(_ id: UUID, to label: String) { update(id) { $0.label = label } }

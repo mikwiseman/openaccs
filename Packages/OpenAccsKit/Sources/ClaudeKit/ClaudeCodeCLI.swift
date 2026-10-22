@@ -13,6 +13,8 @@ public struct ClaudeCLIIdentity: Sendable, Hashable {
 /// OpenAccs-owned CLAUDE_CONFIG_DIR. OpenAccs never reads the CLI's credentials; it only asks the CLI.
 public struct ClaudeCodeCLI: Sendable {
     public let paths: Paths
+    /// Opens the sign-in link in the default browser.
+    var opener = "/usr/bin/open"
 
     public init(paths: Paths) { self.paths = paths }
 
@@ -47,17 +49,49 @@ public struct ClaudeCodeCLI: Sendable {
         paths.claudeProfilesDir.appending(path: "\(accountID.uuidString)/Code", directoryHint: .notDirectory)
     }
 
-    /// Runs Anthropic's own sign-in (`claude auth login --claudeai`) for that config dir. Opens the browser;
-    /// waits up to 10 minutes.
-    public func login(configDir: URL, email: String?) async throws {
+    /// Runs Anthropic's own sign-in (`claude auth login --claudeai`) for that config dir and waits up to
+    /// 10 minutes. The CLI opens its link through `$BROWSER`: a small helper opens it in the default browser as
+    /// usual and hands it to `onLink`, because the sign-in finishes in whichever window opens it. A browser
+    /// signed in to claude.ai as another account can't finish it (claude.ai says "Unable to access Claude
+    /// Code"); a private window can.
+    public func login(configDir: URL, email: String?, onLink: @escaping @Sendable (URL) -> Void = { _ in }) async throws {
         guard let claude = executable() else { throw ProcessError.notFound("claude") }
         try FS.makeDirectory(configDir)
         var arguments = ["auth", "login", "--claudeai"]
         if let email, !email.isEmpty { arguments += ["--email", email] }
+        // Outside Application Support: a path with spaces may not survive as $BROWSER.
+        let scratch = FileManager.default.temporaryDirectory.appending(path: "openaccs-sign-in-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FS.makeDirectory(scratch)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let link = scratch.appending(path: "link"), helper = scratch.appending(path: "open")
+        try AtomicFile.write(Data("#!/bin/sh\nprintf '%s' \"$1\" > \(Self.quoted(link.path))\nexec \(Self.quoted(opener)) \"$1\"\n".utf8),
+                             to: helper, permissions: 0o700)
+        let watch = Task {
+            while !Task.isCancelled {
+                if let text = try? String(contentsOf: link, encoding: .utf8), let url = URL(string: text), url.scheme == "https" {
+                    onLink(url)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        defer { watch.cancel() }
+        var environment = environment(configDir)
+        environment["BROWSER"] = helper.path
         let result = try await ProcessRunner.run(
-            claude, arguments, environment: environment(configDir), currentDirectory: try neutralDirectory(), timeout: .seconds(600)
+            claude, arguments, environment: environment, currentDirectory: try neutralDirectory(), timeout: .seconds(600)
         )
         guard result.status == 0 else { throw ProcessError.failed("claude auth login", result.status, result.stderrString) }
+        // A sign-in that finished faster than the watch looked still has its link.
+        if !watch.isCancelled, let text = try? String(contentsOf: link, encoding: .utf8), let url = URL(string: text), url.scheme == "https" {
+            watch.cancel()
+            onLink(url)
+        }
+    }
+
+    /// For a POSIX shell: single quotes, with any single quote spelled out.
+    static func quoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Who the CLI is signed in as: `<dir>/.claude.json` `oauthAccount`. nil when not signed in.

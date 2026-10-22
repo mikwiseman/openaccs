@@ -149,10 +149,14 @@ Close any `codex` sessions in Terminal before you switch, because they keep the 
 
 ### Connect exact Claude limits
 
-1. Right-click (or Control-click) a Claude account and choose Connect Exact Limits.
+1. Click Connect exact limits under a Claude account, or right-click it and choose Connect Exact Limits.
 2. Your browser opens Anthropic's sign-in page for Claude Code. Sign in with the same account as that profile.
 
+claude.ai completes this sign-in for whichever account is signed in to claude.ai in that browser. If that's another account, claude.ai says "Unable to access Claude Code". Then click Copy link under the account in OpenAccs, open the link in a private window, and sign in there with the right account.
+
 OpenAccs checks that Claude Code signed in to the same account as the profile, and it refuses to show another account's limits under it. From then on, the row shows reset times and your plan.
+
+When the Claude app's own numbers say a limit is empty, they can't say when it comes back. The row then says "Back time unknown" and offers Connect exact limits.
 
 ### Add a Kimi Code or Z.ai key
 

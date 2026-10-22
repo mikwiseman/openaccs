@@ -20,6 +20,7 @@ struct AccountRow: View {
     @State private var task: Task<Void, Never>?
     @State private var failure: String?
     @State private var pulse = 0
+    @State private var copiedLink = false
     @FocusState private var nameFocused: Bool
 
     enum Confirm { case switchCodex, remove }
@@ -131,9 +132,19 @@ struct AccountRow: View {
                 .captionStyle(lines: 2)
                 .allowsHitTesting(false)
         } else if let working {
-            HStack(spacing: 8) {
-                Text(working).foregroundStyle(.secondary).allowsHitTesting(false)
-                Button("Cancel") { task?.cancel() }.buttonStyle(.inlineLink)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(working).foregroundStyle(.secondary).allowsHitTesting(false)
+                    Button("Cancel") { task?.cancel() }.buttonStyle(.inlineLink)
+                }
+                // claude.ai finishes the sign-in for whoever is signed in there; another account can't.
+                if let link = row.signInLink {
+                    HStack(spacing: 0) {
+                        Text("Wrong account? ").foregroundStyle(.secondary).allowsHitTesting(false)
+                        Button(copiedLink ? "Copied" : "Copy link") { copy(link) }.buttonStyle(.inlineLink)
+                        Text(" for a private window").foregroundStyle(.secondary).allowsHitTesting(false)
+                    }
+                }
             }
             .captionStyle()
         } else if row.needsSignIn {
@@ -149,17 +160,19 @@ struct AccountRow: View {
         } else {
             let notes = notes
             let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges)
-            // No numbers worth showing: the way to live ones (Anthropic's CLI, one browser sign-in).
-            let offerLive = row.provider == .claude && row.canConnectLimits && row.usage == nil
+            // No numbers worth showing, or an empty limit with no time it comes back (the Claude app's numbers
+            // don't have one): the way to live ones (Anthropic's CLI, one browser sign-in).
+            let backUnknown = meters.contains { UsageText.isEmpty($0) && $0.resetsAt == nil }
+            let offerLive = row.provider == .claude && row.canConnectLimits && (row.usage == nil || backUnknown)
             if offerLive {
                 HStack(spacing: 0) {
-                    Text(row.error ?? "No limits yet").foregroundStyle(.secondary).allowsHitTesting(false)
+                    Text(row.usage == nil ? row.error ?? "No limits yet" : "Back time unknown").foregroundStyle(.secondary).allowsHitTesting(false)
                     separator
                     Button("Connect exact limits", action: connectLimits).buttonStyle(.inlineLink)
                 }
                 .captionStyle()
             }
-            let error = offerLive ? nil : row.error
+            let error = offerLive && row.usage == nil ? nil : row.error
             if waiting != nil || !notes.isEmpty || error != nil {
                 HStack(spacing: 0) {
                     if let error {
@@ -295,12 +308,24 @@ struct AccountRow: View {
         }
     }
 
+    private func copy(_ link: URL) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link.absoluteString, forType: .string)
+        copiedLink = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            copiedLink = false
+        }
+    }
+
     private func restart() {
         run("Restarting Claude…") { try await model.restart(row.id) }
     }
 
     private func connectLimits() {
-        run("Sign in to Claude Code in your browser…") { try await model.connectExactLimits(row.id) }
+        run(row.label.contains("@") ? "Sign in as \(row.label)…" : "Sign in to Claude Code in your browser…") {
+            try await model.connectExactLimits(row.id)
+        }
     }
 
     private func commitRename() {

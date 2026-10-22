@@ -57,6 +57,8 @@ final class AppModel: PanelModel {
     private var pending: [UUID: Pending] = [:]
     /// The account each Claude profile's app loaded last, as Claude's log says.
     private var shownAccount: [UUID: String] = [:]
+    /// The link of a Claude Code sign-in in progress, to open in another browser window.
+    private var signInLinks: [UUID: URL] = [:]
     private var liveCodex: CodexAccountInfo?
     private var lastFetch: [UUID: Date] = [:]
     private var codexAuthDate: Date?
@@ -500,6 +502,7 @@ final class AppModel: PanelModel {
                 row.pendingChanges = waiting.changed
                 row.canConnectLimits = account.claude?.cliConfigDir == nil
                 row.hasFolder = true
+                row.signInLink = signInLinks[account.id]
                 if let snapshot, snapshot.source == ClaudeAppUsage.source, now.timeIntervalSince(snapshot.asOf) > ClaudeAppUsage.freshFor {
                     row.usage = nil
                     row.error = "Claude app numbers are old"
@@ -590,7 +593,16 @@ final class AppModel: PanelModel {
         let account = accounts[i]
         let dir = claudeCLI.configDir(for: id)
         let email = account.label.contains("@") ? account.label : nil
-        try await claudeCLI.login(configDir: dir, email: email)
+        defer {
+            signInLinks[id] = nil
+            rebuild()
+        }
+        try await claudeCLI.login(configDir: dir, email: email) { link in
+            Task { @MainActor [weak self] in
+                self?.signInLinks[id] = link
+                self?.rebuild()
+            }
+        }
         guard let who = claudeCLI.identity(configDir: dir) else { throw AppError.signInIncomplete }
         // The browser may have signed the CLI into another account: never show its limits under this one.
         let expected = profile(account)?.accountUuid

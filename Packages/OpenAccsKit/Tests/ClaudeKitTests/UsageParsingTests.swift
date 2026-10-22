@@ -157,6 +157,27 @@ private func iso(_ string: String) -> Date {
         #expect(cli.executable()?.path == installed.resolvingSymlinksInPath().path)
     }
 
+    @Test func signInPassesOnTheLinkItOpens() async throws {
+        let home = try TempHome()
+        // A stand-in for Anthropic's CLI: opens its sign-in link through $BROWSER, then finishes.
+        let fake = try home.write(".local/bin/claude", """
+        #!/bin/sh
+        "$BROWSER" 'https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5%2Fcallback&login_hint=a%40b.c'
+        sleep 1
+        """)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        var cli = ClaudeCodeCLI(paths: home.paths)
+        cli.opener = "/usr/bin/true"   // never a real browser in tests
+        let link = Flag()
+        let seen = LinkHolder()
+        try await cli.login(configDir: cli.configDir(for: UUID()), email: "a@b.c") { url in
+            seen.url = url
+            link.set()
+        }
+        #expect(link.isSet)
+        #expect(seen.url?.absoluteString.hasPrefix("https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost") == true)
+    }
+
     @Test func configDirAndIdentity() throws {
         let home = try TempHome()
         let cli = ClaudeCodeCLI(paths: home.paths)
@@ -175,5 +196,14 @@ private func iso(_ string: String) -> Date {
         #expect(cli.identity(configDir: dir) == ClaudeCLIIdentity(
             email: "work@example.com", organization: "Example", accountUuid: "11111111-1111-4111-8111-111111111111"
         ))
+    }
+}
+
+private final class LinkHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: URL?
+    var url: URL? {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }

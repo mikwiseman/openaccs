@@ -72,4 +72,6 @@ struct PanelRow: Identifiable, Hashable {
     var canConnectLimits: Bool = false
     /// Has a data folder to show in Finder.
     var hasFolder: Bool = false
+    /// Claude: the link of a Claude Code sign-in in progress (for a private window).
+    var signInLink: URL?
 }

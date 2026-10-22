@@ -157,6 +157,7 @@ private struct Command {
         try allow([])
         let account = try resolve(query, in: try App.call(ControlRequest(.status)).accounts, claudeOnly: "connect")
         Terminal.note("Sign in to Claude Code in your browser as \(account.label). Ctrl-C cancels.")
+        Terminal.note("If claude.ai says \"Unable to access Claude Code\", it's signed in as another account: click Copy link under the account in OpenAccs and open it in a private window.")
         _ = try App.call(ControlRequest(.connect, id: account.id))
         print("Exact limits connected for \(account.label).")
     }
