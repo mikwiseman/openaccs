@@ -373,8 +373,8 @@ final class AppModel: PanelModel {
         // meanwhile (it would be on its old folder), keep it as is; the next stop copies again.
         guard let i = accounts.firstIndex(where: { $0.id == id }) else { return }
         if let p = profile(accounts[i]), claude.mayBeRunning(p) || claude.hasProcesses(p) { return }
-        // Files left out (conflicts) are tried again next time.
-        if report.conflicts.isEmpty { accounts[i].claude?.importedFingerprint = fingerprint }
+        // Done even with conflicts: the same old folder gives the same answer, so only a change in it imports again.
+        accounts[i].claude?.importedFingerprint = fingerprint
         if firstTime {
             accounts[i].claude?.migratedFrom = legacy
             accounts[i].claude?.legacyConfigDir = nil
