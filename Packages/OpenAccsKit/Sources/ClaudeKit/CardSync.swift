@@ -75,6 +75,7 @@ struct SyncRecords: Sendable, Hashable {
 public struct CardSync: Sendable {
     public let paths: Paths
     let claude: ClaudeProfiles
+    let cache = CardCache()
 
     public init(paths: Paths) {
         self.init(claude: ClaudeProfiles(paths: paths))
@@ -150,7 +151,7 @@ public struct CardSync: Sendable {
                 if isRunning && (dir == shown || !isSure) { live.insert(dir) }
             }
         }
-        let scan = try Scan(profiles: targets, paths: paths)
+        let scan = try Scan(profiles: targets, paths: paths, cache: cache)
         let madeByUs = Set(scan.state.created.map(\.file))
         let agreement = Agreement(scan: scan, current: current, madeByUs: madeByUs)
         var operations: [SyncOperation] = []
@@ -170,18 +171,19 @@ public struct CardSync: Sendable {
             for card in folder.cards {
                 guard let id = card.cliSessionId else { continue }
                 if scan.deleted.contains(id) {
-                    guard !isLive, madeByUs.contains(card.file.path) else { continue }
+                    guard !isLive, madeByUs.contains(card.file.path), let raw = card.contents() else { continue }
                     operations.append(SyncOperation(kind: .remove, dataDir: dataDir, file: card.file, cliSessionId: id,
-                                                    expected: card.raw, requiresStopped: isGuarded))
+                                                    expected: raw, requiresStopped: isGuarded))
                     continue
                 }
                 guard let fresh = scan.universe[id] else { continue }
                 let wanted = agreement.settings[id] ?? [:]
                 if isLive {
                     if Self.differs(card.object, from: wanted) { behind += 1 }
-                } else if let (data, settles, onlyActivity) = Self.updated(card, from: fresh, settings: wanted, companions: agreement.companions[id]) {
+                } else if let (fields, settles, onlyActivity) = Self.updated(card, from: fresh, settings: wanted, companions: agreement.companions[id]),
+                          let (raw, data) = card.edited(to: fields) {
                     operations.append(SyncOperation(kind: .update, dataDir: dataDir, file: card.file, cliSessionId: id, contents: data,
-                                                    expected: card.raw, requiresStopped: isGuarded, settles: settles, backup: !onlyActivity))
+                                                    expected: raw, requiresStopped: isGuarded, settles: settles, backup: !onlyActivity))
                 }
             }
             if behind > 0 { waiting[dir] = behind }
@@ -261,7 +263,7 @@ public struct CardSync: Sendable {
             guard let args = $0.arguments, !ClaudeProfiles.isHelper(args) else { return false }
             return claude.dataDir(fromArguments: args).standardizedFileURL.path == path
         }), let cardsDir = profile.cardsDir?.standardizedFileURL.path,
-            let scan = try? Scan(profiles: (profiles + [profile]).flatMap(claude.folders(of:)), paths: paths),
+            let scan = try? Scan(profiles: (profiles + [profile]).flatMap(claude.folders(of:)), paths: paths, cache: cache),
             let folder = scan.folders.first(where: { $0.dir.path == cardsDir }) else { return 0 }
         let launch = process.launchDate ?? .distantFuture
         let createdAt = Dictionary(scan.state.created.map { ($0.file, $0.createdAt) }, uniquingKeysWith: max)
@@ -292,10 +294,10 @@ public struct CardSync: Sendable {
         return (sessionId + ".json", data, values(of: card))
     }
 
-    /// `card` with lastActivityAt from `fresh` (and its title and titleSource too unless someone chose the
-    /// card's title) and the agreed chat settings, plus whether only the activity time changed. nil when
-    /// nothing changes.
-    static func updated(_ card: Card, from fresh: Card, settings wanted: [String: String], companions: [String: Any]?) -> (Data, [String: String], Bool)? {
+    /// `card`'s chat fields with lastActivityAt from `fresh` (and its title and titleSource too unless someone
+    /// chose the card's title) and the agreed chat settings, plus whether only the activity time changed.
+    /// nil when nothing changes.
+    static func updated(_ card: Card, from fresh: Card, settings wanted: [String: String], companions: [String: Any]?) -> ([String: Any], [String: String], Bool)? {
         var object = card.object
         if fresh.lastActivityAt > card.lastActivityAt {
             let titleIsChosen = (card.object["titleSource"] as? String).map(chosenTitleSources.contains) ?? false
@@ -304,11 +306,10 @@ public struct CardSync: Sendable {
             }
         }
         apply(wanted, companions: companions, to: &object)
-        guard !(object as NSDictionary).isEqual(to: card.object),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes]) else { return nil }
+        guard !(object as NSDictionary).isEqual(to: card.object) else { return nil }
         var activityOnly = object
         activityOnly["lastActivityAt"] = card.object["lastActivityAt"]
-        return (data, values(of: object), (activityOnly as NSDictionary).isEqual(to: card.object))
+        return (object, values(of: object), (activityOnly as NSDictionary).isEqual(to: card.object))
     }
 
     /// Sets each agreed setting the card lacks, with the fields that go with it (from the card that holds
@@ -400,10 +401,16 @@ struct Agreement {
     }
 }
 
-/// One card file as read from disk.
+/// One card file as read from disk, with only the fields a sync uses: Claude also writes account data
+/// into cards (`remoteMcpServersConfig` alone can be 600 KB), which stays on disk until a card is edited.
 struct Card {
+    /// The fields a sync copies, and the ones that go with a permission mode.
+    static let fields = Set(CardSync.copiedFields + CardSync.settings.flatMap(\.companions))
+
     var file: URL
-    var raw: Data
+    /// The file as it was read: an edit reads the whole file again only while it is still this one.
+    var version: FileVersion
+    /// The card's `fields`.
     var object: [String: Any]
     var sessionId: String
     /// nil after /clear until the next message starts a new transcript. Such a card is never a source
@@ -412,21 +419,22 @@ struct Card {
     var lastActivityAt: Double
     /// When the chat was last opened in this profile; 0 if never.
     var lastFocusedAt: Double
-    /// When the file last changed (which copy changed a setting last).
-    var modified: Date = .distantPast
     /// Earlier transcript ids this card replaced (`priorCliSessionIds`, `preClearCliSessionId`, and
     /// `unarchivedCliSessionId` while it has no `cliSessionId`).
     var lineage: Set<String>
     /// Every transcript id this card stands for in its profile.
     var claims: Set<String>
 
-    init?(file: URL, raw: Data) {
+    /// When the file last changed (which copy changed a setting last).
+    var modified: Date { version.modificationDate }
+
+    init?(file: URL, version: FileVersion, raw: Data) {
         guard let object = JSON.object(raw), let sessionId = object["sessionId"] as? String else { return nil }
         let cli = object["cliSessionId"] as? String
         if let cli, !FS.isSafeName(cli) { return nil }
         self.file = file
-        self.raw = raw
-        self.object = object
+        self.version = version
+        self.object = object.filter { Self.fields.contains($0.key) }
         self.sessionId = sessionId
         cliSessionId = cli
         lastActivityAt = JSON.double(object["lastActivityAt"]) ?? 0
@@ -441,6 +449,51 @@ struct Card {
 
     /// Enough to become a new session elsewhere.
     var isCopyable: Bool { object["cwd"] is String }
+
+    /// The whole file, if it is still the version this card was read from.
+    func contents() -> Data? {
+        guard FS.version(file) == version, let data = try? Data(contentsOf: file), FS.version(file) == version else { return nil }
+        return data
+    }
+
+    /// The whole file now, and with these values for the card's `fields` (everything else as it is).
+    func edited(to values: [String: Any]) -> (Data, Data)? {
+        guard let raw = contents(), var object = JSON.object(raw) else { return nil }
+        for key in Self.fields { object[key] = values[key] }
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes]) else { return nil }
+        return (raw, data)
+    }
+}
+
+/// Cards read before, by file: one is parsed again only when its file changes, so a sync looks at each
+/// file instead of parsing every card (a profile's cards can add up to 100 MB).
+final class CardCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: (version: FileVersion, card: Card?)] = [:]
+    /// Files parsed so far.
+    private(set) var reads = 0
+
+    var cards: [Card] { lock.withLock { entries.values.compactMap(\.card) } }
+
+    /// The card in `file`; nil when it isn't a regular file or a card.
+    func card(at file: URL) -> Card? {
+        guard let version = FS.version(file) else { return nil }
+        if let entry = lock.withLock({ entries[file.path] }), entry.version == version { return entry.card }
+        let card = (try? Data(contentsOf: file)).flatMap { Card(file: file, version: version, raw: $0) }
+        lock.withLock {
+            entries[file.path] = (version, card)
+            reads += 1
+        }
+        return card
+    }
+
+    /// Forgets the files of `dir` that are gone.
+    func keep(_ names: Set<String>, in dir: URL) {
+        let prefix = dir.path + "/"
+        lock.withLock {
+            entries = entries.filter { path, _ in !path.hasPrefix(prefix) || names.contains(String(path.dropFirst(prefix.count))) }
+        }
+    }
 }
 
 /// One profile's current card folder.
@@ -456,7 +509,7 @@ struct CardFolder {
     var claims: Set<String> = []
 
     /// nil when the folder can't be used safely (symlinked, not a directory, unreadable).
-    init?(profile: ClaudeProfile) {
+    init?(profile: ClaudeProfile, cache: CardCache) {
         guard let cardsDir = profile.cardsDir else { return nil }
         self.profile = profile
         dir = cardsDir.standardizedFileURL
@@ -474,13 +527,11 @@ struct CardFolder {
                 if FS.isSafeName(id) { tombstones.insert(id) }
                 continue
             }
-            guard name.hasPrefix("local_"), name.hasSuffix(".json") else { continue }
-            let file = dir.appending(path: name)
-            guard FS.isRegularFile(file), let raw = try? Data(contentsOf: file), var card = Card(file: file, raw: raw) else { continue }
-            card.modified = FS.modificationDate(file) ?? .distantPast
+            guard name.hasPrefix("local_"), name.hasSuffix(".json"), let card = cache.card(at: dir.appending(path: name)) else { continue }
             cards.append(card)
             claims.formUnion(card.claims)
         }
+        cache.keep(self.names, in: dir)
     }
 }
 
@@ -495,11 +546,11 @@ struct Scan {
     /// cliSessionId → freshest copyable card of a live session whose transcript exists.
     var universe: [String: Card] = [:]
 
-    init(profiles: [ClaudeProfile], paths: Paths) throws {
+    init(profiles: [ClaudeProfile], paths: Paths, cache: CardCache) throws {
         state = try SyncState.load(paths.syncStateFile)
         var seen = Set<String>()
         for profile in profiles {
-            guard let folder = CardFolder(profile: profile), seen.insert(folder.dir.path).inserted else { continue }
+            guard let folder = CardFolder(profile: profile, cache: cache), seen.insert(folder.dir.path).inserted else { continue }
             folders.append(folder)
         }
 

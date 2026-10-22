@@ -33,6 +33,14 @@ enum FS {
         return Int64(info.st_mtimespec.tv_sec) * 1_000_000 + (Int64(info.st_mtimespec.tv_nsec) + 500) / 1_000
     }
 
+    /// Which version of a regular file is there: any write or replacement changes it. nil for anything else.
+    static func version(_ url: URL) -> FileVersion? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+        let m = info.st_mtimespec, c = info.st_ctimespec
+        return FileVersion(size: info.st_size, inode: info.st_ino, modified: [Int64(m.tv_sec), Int64(m.tv_nsec)], changed: [Int64(c.tv_sec), Int64(c.tv_nsec)])
+    }
+
     static func modificationDate(_ url: URL) -> Date? {
         var info = stat()
         guard lstat(url.path, &info) == 0 else { return nil }
@@ -67,6 +75,16 @@ enum FS {
     static func isSafeName(_ name: some StringProtocol) -> Bool {
         !name.isEmpty && name.count <= 128 && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
     }
+}
+
+struct FileVersion: Hashable, Sendable {
+    var size: Int64
+    var inode: UInt64
+    /// Seconds and nanoseconds.
+    var modified: [Int64]
+    var changed: [Int64]
+
+    var modificationDate: Date { Date(timeIntervalSince1970: TimeInterval(modified[0]) + TimeInterval(modified[1]) / 1e9) }
 }
 
 /// One backup folder per run: `<backups>/<date time> <label>/<original absolute path>`.

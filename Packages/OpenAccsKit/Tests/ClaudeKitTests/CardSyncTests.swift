@@ -676,6 +676,30 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(home.backups.count == 1)
     }
 
+    @Test func cardsAreReadOnceUntilTheyChangeAndKeepOnlyChatFieldsInMemory() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        // Claude writes hundreds of KB of account data into each card; a sync never needs it.
+        let big: [String: Any] = ["remoteMcpServersConfig": ["linear": String(repeating: "x", count: 200_000)]]
+        try home.card(a, s.card(title: "New", at: 2_000, big))
+        let mine = try home.card(b, s.card(title: "Old", at: 1_000, big))
+        try home.transcript(s)
+        let sync = cardSync(home)
+
+        _ = try sync.apply(sync.plan(profiles: [a, b], running: []))
+        #expect(sync.cache.reads == 2)
+        #expect(home.json(at: mine)["title"] as? String == "New")
+        #expect(NSDictionary(dictionary: home.json(at: mine)["remoteMcpServersConfig"] as? [String: Any] ?? [:])
+            .isEqual(to: big["remoteMcpServersConfig"] as! [String: Any]))
+        _ = try sync.plan(profiles: [a, b], running: [])   // only B's rewritten card is read again
+        #expect(sync.cache.reads == 3)
+        let plan = try sync.plan(profiles: [a, b], running: [])
+        _ = sync.pendingCount(for: b, among: [a, b])
+        #expect(plan.isEmpty && sync.cache.reads == 3)
+        #expect(sync.cache.cards.allSatisfy { Set($0.object.keys).isSubset(of: Card.fields) })
+    }
+
     @Test func pendingCountIsWhatARunningProfileHasNotLoaded() throws {
         let home = try TempHome()
         let a = home.profile("A"), b = home.profile("B")
