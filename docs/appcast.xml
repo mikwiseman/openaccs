@@ -1,0 +1,33 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>OpenAccs</title>
+        <item>
+            <title>0.3.3</title>
+            <pubDate>Fri, 23 Oct 2026 08:20:33 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.3.3</sparkle:version>
+            <sparkle:shortVersionString>0.3.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## Fixes
+
+- **Pins are the same in every window.** The Claude app keeps a window's pins in its own browser storage and reads them only from there at launch. OpenAccs used to sync a card field the sidebar no longer reads. Now it writes the pinned chats where Claude reads them, while that window is closed. A pin or unpin wins in whichever window you made it. The first time, every chat pinned in any window stays pinned.
+- **Ultracode is the same in every window.** Claude keeps it per chat, apart from the effort, and OpenAccs now carries it over like the permission mode and the effort.
+- **A window that is open gets the changes when it restarts.** When you switch to it from OpenAccs and nothing is running there, OpenAccs restarts it. Otherwise its row shows what's waiting, with a Restart link.
+
+## New
+
+- **Settings and updates.** OpenAccs has a Settings window (More menu → Settings…) and updates itself: it checks once a day, and each update asks before it installs. This version is the first that updates itself; earlier versions need this one installed by hand.
+
+## Install
+
+Download `OpenAccs-0.3.3.zip` below, unzip it and move `OpenAccs.app` to Applications, replacing the old version. Requires macOS 26 or later. The app is signed with a Developer ID and notarized by Apple.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.3.3/OpenAccs-0.3.3.zip" length="3678720" type="application/octet-stream" sparkle:edSignature="EOUxRiKc3tiA9gZThSXI2mfR8bx92z7fN9AWngEWxGMW8riIdYJUR0WgNa4YW8qdbYh5T6mVKGwf7LAcRU/YBA=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: Qz0cHVOccG0k0+fCKPj5RgkBFmouMKtiHmtbx2oFgN7s1yYuvuIn1yFSbTXR2CPsGp/jbM6/cddnKNWbAATmCQ==
+length: 2483
+-->
