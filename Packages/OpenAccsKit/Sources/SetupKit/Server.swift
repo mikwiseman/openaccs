@@ -29,7 +29,7 @@ public enum ServerSetup {
         }
 
         // Skills: every valid one Claude or Codex sees, stored once; the links are resolved to real folders.
-        var skills: [String: URL] = [:]
+        var skills: [String: URL] = [:], hidden: Set<String> = []
         for folder in [".agents/skills", ".claude/skills", ".codex/skills"] {
             for name in ((try? fm.contentsOfDirectory(atPath: context.url(folder).path)) ?? []).sorted()
             where !name.hasPrefix(".") && name != "synced" && skills[name] == nil {
@@ -40,7 +40,7 @@ public enum ServerSetup {
         if !skills.isEmpty {
             let target = stage.appending(path: "skills")
             try fm.createDirectory(at: target, withIntermediateDirectories: true)
-            for (name, dir) in skills { try copyResolved(dir, to: target.appending(path: name)) }
+            for (name, dir) in skills { hidden.formUnion(try copyResolved(dir, to: target.appending(path: name))) }
             plan.goes.append("Skills: \(skills.count)")
         }
 
@@ -48,9 +48,11 @@ public enum ServerSetup {
             let dir = context.url(".claude/\(part)")
             let names = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).filter { !$0.hasPrefix(".") }
             guard !names.isEmpty else { continue }
-            try copyResolved(dir, to: stage.appending(path: "claude/\(part)"))
+            hidden.formUnion(try copyResolved(dir, to: stage.appending(path: "claude/\(part)")))
             plan.goes.append("Claude \(part): \(names.count)")
         }
+        hidden.subtract([".DS_Store", ".git"])
+        if !hidden.isEmpty { plan.stays.append("Hidden files (\(hidden.sorted().joined(separator: ", "))): they can hold keys; copy what a skill needs yourself") }
 
         if let data = try? Data(contentsOf: context.url(".claude/settings.json")), let settings = JSON.object(data) {
             let (kept, dropped) = serverSettings(settings)
@@ -105,34 +107,52 @@ public enum ServerSetup {
     static let codexKeys = ["model", "model_reasoning_effort", "plan_mode_reasoning_effort", "personality", "approval_policy",
                             "sandbox_mode", "approvals_reviewer", "project_doc_fallback_filenames", "web_search"]
 
+    static let keyReason = "a key is written into its settings; add it on the server with your key"
+
     /// Why a Codex MCP server can't go as it is, or nil. Codex names its keys' variables (env_vars,
-    /// bearer_token_env_var, env_http_headers), so only literal env and http_headers values are keys.
+    /// bearer_token_env_var, env_http_headers), so literal env and http_headers values are keys.
     static func whyNotPortable(_ name: String, codex spec: TOMLValue) -> String? {
         let table = spec.table ?? [:]
+        let args = (table["args"]?.array ?? []).compactMap(\.string)
         if macOnly.contains(name) { return "works only on a Mac" }
         if let command = table["command"]?.string, isMacPath(command) || command.contains(".app/") || command.hasPrefix("/") && !command.hasPrefix("/usr/") {
             return "runs a program on this Mac"
         }
-        if (table["args"]?.array ?? []).contains(where: { isMacPath($0.string ?? "") }) { return "uses files on this Mac" }
+        if args.contains(where: isMacPath) || isMacPath(table["cwd"]?.string ?? "") { return "uses files on this Mac" }
         if let helper = table["http_headers_helper"], isMacPath("\(helper)") { return "its sign-in helper is on this Mac" }
-        if !(table["env"]?.table ?? [:]).isEmpty || !(table["http_headers"]?.table ?? [:]).isEmpty {
-            return "a key is written into its settings; add it on the server with your key"
+        if !(table["env"]?.table ?? [:]).isEmpty || !(table["http_headers"]?.table ?? [:]).isEmpty
+            || carriesKey(args + [table["url"]?.string ?? ""]) {
+            return keyReason
         }
         return nil
     }
 
-    /// Claude's settings without what points at this Mac: PATH, hooks and a status line run from Mac paths,
-    /// and plugin marketplaces that are local folders (with the plugins they hold).
+    /// Claude settings that are plain preferences, fine on any machine. The rest stays: apiKeyHelper,
+    /// otelHeadersHelper, awsAuthRefresh and the like run a command here or hold a key, and new keys are unknown.
+    static let claudeKeys: Set<String> = [
+        "$schema", "model", "modelSettings", "effortLevel", "alwaysThinkingEnabled", "outputStyle", "language", "theme",
+        "permissions", "env", "hooks", "statusLine", "enabledPlugins", "extraKnownMarketplaces", "cleanupPeriodDays",
+        "includeCoAuthoredBy", "spinnerTipsEnabled", "voice", "agentPushNotifEnabled", "inputNeededNotifEnabled",
+        "skipAutoPermissionPrompt", "skipDangerousModePermissionPrompt", "skipWorkflowUsageWarning",
+    ]
+
+    /// Claude's settings as a server gets them: the known-safe keys, without what needs this Mac (PATH, hooks and a
+    /// status line that run its files or tools, plugin marketplaces that are local folders with the plugins they
+    /// hold) and without keys written into env.
     static func serverSettings(_ settings: [String: Any]) -> (kept: [String: Any], dropped: [String]) {
-        var kept = settings, dropped: [String] = []
+        var kept = settings.filter { claudeKeys.contains($0.key) }, dropped: [String] = []
+        let unknown = settings.keys.filter { !claudeKeys.contains($0) }.sorted()
+        if !unknown.isEmpty {
+            dropped.append("Claude settings \(unknown.joined(separator: ", ")): not known to be safe on a server (some run a command or hold a key)")
+        }
         if var env = kept["env"] as? [String: Any] {
             for (key, value) in env where key == "PATH" || isMacPath("\(value)") {
                 env[key] = nil
                 dropped.append("Claude setting env.\(key): points at this Mac")
             }
-            // A key written into the settings never travels; a ${VAR} reference does.
-            let secret = ["KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL"]
-            for (key, value) in env where secret.contains(where: key.uppercased().contains) && !"\(value)".hasPrefix("${") {
+            // A key written into the settings never travels, whatever its name; a ${VAR} reference does.
+            let secret = ["KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL", "HEADER", "DSN", "COOKIE"]
+            for (key, value) in env where !"\(value)".hasPrefix("${") && (secret.contains(where: key.uppercased().contains) || carriesKey(["\(value)"])) {
                 env[key] = nil
                 dropped.append("Claude setting env.\(key): a key; set it on the server yourself")
             }
@@ -141,20 +161,23 @@ public enum ServerSetup {
         if var hooks = kept["hooks"] as? [String: Any] {
             for (event, value) in hooks {
                 guard let groups = value as? [[String: Any]] else { continue }
+                var left = false
                 let portable = groups.compactMap { group -> [String: Any]? in
                     var group = group
-                    let commands = (group["hooks"] as? [[String: Any]] ?? []).filter { !isMacPath($0["command"] as? String ?? "") }
+                    let all = group["hooks"] as? [[String: Any]] ?? []
+                    let commands = all.filter { !needsThisMac($0["command"] as? String ?? "") }
+                    left = left || commands.count != all.count
                     group["hooks"] = commands
                     return commands.isEmpty ? nil : group
                 }
-                if portable.count != groups.count { dropped.append("Claude hook \(event): runs a file on this Mac") }
+                if left { dropped.append("Claude hook \(event): needs this Mac") }
                 hooks[event] = portable.isEmpty ? nil : portable
             }
             kept["hooks"] = hooks.isEmpty ? nil : hooks
         }
-        if let status = kept["statusLine"] as? [String: Any], isMacPath(status["command"] as? String ?? "") {
+        if let status = kept["statusLine"] as? [String: Any], needsThisMac(status["command"] as? String ?? "") {
             kept["statusLine"] = nil
-            dropped.append("Claude status line: runs a file on this Mac")
+            dropped.append("Claude status line: needs this Mac")
         }
         if var markets = kept["extraKnownMarketplaces"] as? [String: Any] {
             for (name, value) in markets {
@@ -174,41 +197,73 @@ public enum ServerSetup {
 
     /// Why an MCP server can't go as it is, or nil.
     static func whyNotPortable(_ name: String, _ spec: [String: Any]) -> String? {
+        let args = (spec["args"] as? [Any] ?? []).map { "\($0)" }
         if macOnly.contains(name) { return "works only on a Mac" }
         if let command = spec["command"] as? String, isMacPath(command) || command.hasPrefix("/") && !command.hasPrefix("/usr/") {
             return "runs a program on this Mac"
         }
-        if (spec["args"] as? [Any] ?? []).contains(where: { isMacPath("\($0)") }) { return "uses files on this Mac" }
+        if args.contains(where: isMacPath) { return "uses files on this Mac" }
         if let helper = spec["headersHelper"] as? String, isMacPath(helper) { return "its sign-in helper is on this Mac" }
+        if carriesKey(args + [spec["url"] as? String ?? ""]) { return keyReason }
         for field in ["env", "headers"] {
-            for (_, value) in spec[field] as? [String: Any] ?? [:] {
-                let text = "\(value)"
-                if !text.contains("${") { return "a key is written into its settings; add it on the server with your key" }
-            }
+            for (_, value) in spec[field] as? [String: Any] ?? [:] where !"\(value)".contains("${") { return keyReason }
         }
         return nil
+    }
+
+    /// Whether literal values carry a key: "Authorization: Bearer …" or "x-api-key=…", the value after a key flag
+    /// (--api-key …), or a URL with a password, a key in its query, or a long random part in its path (Zapier puts
+    /// its key there). A ${VAR} reference names a key the server has, so it doesn't count.
+    static func carriesKey(_ values: [String]) -> Bool {
+        func keyName(_ name: Substring) -> Bool { ["key", "token", "secret", "password", "auth"].contains(where: name.lowercased().contains) }
+        for (index, value) in values.enumerated() where !value.contains("${") {
+            if value.lowercased().contains("bearer ") { return true }
+            if let url = URLComponents(string: value), url.scheme != nil, url.host != nil {
+                if url.password != nil || (url.queryItems ?? []).contains(where: { keyName(Substring($0.name)) && $0.value?.isEmpty == false }) { return true }
+                if url.path.split(separator: "/").contains(where: { $0.count >= 32 && $0.contains(where: \.isLetter) && $0.contains(where: \.isNumber) }) { return true }
+                continue
+            }
+            if let split = value.firstIndex(where: { $0 == ":" || $0 == "=" }), keyName(value[..<split]),
+               !value[value.index(after: split)...].trimmingCharacters(in: .whitespaces).isEmpty { return true }
+            if value.hasPrefix("-"), keyName(Substring(value)), index + 1 < values.count, !values[index + 1].hasPrefix("-"),
+               !values[index + 1].contains("${") { return true }
+        }
+        return false
     }
 
     static func isMacPath(_ text: String) -> Bool {
         text.contains("/Users/") || text.contains("/Applications/") || text.contains("/Library/") || text.contains("/opt/homebrew/")
     }
 
+    /// Mac tools a hook or status line can call; a server doesn't have them.
+    static let macTools: Set<String> = ["osascript", "afplay", "say", "terminal-notifier", "pbcopy", "pbpaste", "open", "launchctl"]
+
+    /// Whether a command needs this Mac: a Mac path, a file in the home folder (scripts there don't travel), or a Mac tool.
+    static func needsThisMac(_ command: String) -> Bool {
+        let words = command.split(whereSeparator: { " \t\n;|&()'\"".contains($0) }).map { $0.split(separator: "/").last.map(String.init) ?? "" }
+        return isMacPath(command) || ["~/", "$HOME/", "${HOME}/"].contains(where: command.contains) || words.contains(where: macTools.contains)
+    }
+
     /// Copies a folder (or file) with every symbolic link replaced by what it points to (a link back up the
-    /// tree is skipped, so it can't loop).
-    static func copyResolved(_ from: URL, to: URL, inside: Set<String> = []) throws {
+    /// tree is skipped, so it can't loop). Hidden files (.env, .git, …) stay behind, since they can hold keys;
+    /// returns their names.
+    static func copyResolved(_ from: URL, to: URL, inside: Set<String> = []) throws -> Set<String> {
         let fm = FileManager.default
         let source = from.resolvingSymlinksInPath()
-        guard !inside.contains(source.path) else { return }
+        guard !inside.contains(source.path) else { return [] }
         var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: source.path, isDirectory: &isDir) else { return }
+        guard fm.fileExists(atPath: source.path, isDirectory: &isDir) else { return [] }
         guard isDir.boolValue else {
             try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.copyItem(at: source, to: to)
-            return
+            return []
         }
         try fm.createDirectory(at: to, withIntermediateDirectories: true)
-        for name in try fm.contentsOfDirectory(atPath: source.path) where name != ".git" && name != ".DS_Store" {
-            try copyResolved(source.appending(path: name), to: to.appending(path: name), inside: inside.union([source.path]))
+        var hidden: Set<String> = []
+        for name in try fm.contentsOfDirectory(atPath: source.path) {
+            if name.hasPrefix(".") { hidden.insert(name); continue }
+            hidden.formUnion(try copyResolved(source.appending(path: name), to: to.appending(path: name), inside: inside.union([source.path])))
         }
+        return hidden
     }
 }

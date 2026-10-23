@@ -2,11 +2,13 @@
 # Runs on the server for `openaccs vps user@host`, after OpenAccs copied the staged setup to ~/.openaccs/incoming.
 # Installs what is missing (Claude Code, Codex), puts the setup where each tool reads it, backing up what it
 # replaces in ~/.openaccs/backups/<time>, and adds the MCP servers through Claude's own command. Never touches
-# logins: each tool signs in on this server itself. Safe to run again.
+# logins: each tool signs in on this server itself. Safe to run again: ~/.openaccs/placed.sha256 remembers what
+# it put where, and what was changed on this server since then stays as it is.
 set -euo pipefail
 
 incoming="$HOME/.openaccs/incoming"
 backups="$HOME/.openaccs/backups/$(date +%Y-%m-%d-%H%M%S)"
+placed="$HOME/.openaccs/placed.sha256"
 export PATH="$HOME/.local/bin:$PATH"
 
 say() { printf '%s\n' "$*"; }
@@ -17,16 +19,31 @@ keep() { # keep <path>: move what is there into the backup folder
     mv "$target" "$backups/${target#"$HOME"/}"
   fi
 }
-place() { # place <from> <to>: replace <to> with <from> unless they are already the same
-  local from="$1" to="$2"
-  if [ -e "$to" ] && diff -rq "$from" "$to" >/dev/null 2>&1; then return; fi
-  keep "$to"
-  mkdir -p "$(dirname "$to")"
-  cp -R "$from" "$to"
+sum() { # sum <path>: one hash of a file, or of a folder's file names and contents
+  if [ -d "$1" ]; then (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) | sha256sum
+  else sha256sum < "$1"; fi | cut -d' ' -f1
 }
-link() { # link <path> <target>
+recorded() { awk -v p="$1" 'substr($0, 67) == p { print substr($0, 1, 64) }' "$placed" 2>/dev/null || true; }
+place() { # place <from> <to>: put <from> (a file or folder) at <to>, unless <to> was changed here since it was put there
+  local from="$1" to="$2" rel="${2#"$HOME"/}" new now="" last
+  new=$(sum "$from")
+  [ -e "$to" ] && now=$(sum "$to")
+  if [ "$now" != "$new" ]; then
+    last=$(recorded "$rel")
+    if [ -n "$now" ] && [ -n "$last" ] && [ "$now" != "$last" ]; then
+      say "Kept ~/$rel: changed on this server since the last run. To take this Mac's, move it away and run again."
+      return
+    fi
+    keep "$to"
+    mkdir -p "$(dirname "$to")"
+    cp -R "$from" "$to"
+  fi
+  { awk -v p="$rel" 'substr($0, 67) != p' "$placed" 2>/dev/null || true; printf '%s  %s\n' "$new" "$rel"; } > "$placed.new"
+  mv "$placed.new" "$placed"
+}
+link() { # link <path> <target>; nothing to do when <path> already leads there, also when one folder links to the other
   local path="$1" target="$2"
-  [ "$(readlink "$path" 2>/dev/null)" = "$target" ] && return
+  [ -e "$path" ] && [ "$(readlink -f "$path")" = "$(readlink -f "$target")" ] && return
   keep "$path"
   mkdir -p "$(dirname "$path")"
   ln -s "$target" "$path"
@@ -64,9 +81,13 @@ if [ -d "$incoming/skills" ]; then
   done
 fi
 
-# Claude's agents, commands and settings (already filtered for this server on the Mac).
+# Claude's agents and commands one by one, so ones made on this server stay, and its settings (already filtered
+# for this server on the Mac).
 for part in agents commands; do
-  [ -d "$incoming/claude/$part" ] && place "$incoming/claude/$part" "$HOME/.claude/$part"
+  for item in "$incoming/claude/$part"/*; do
+    [ -e "$item" ] || continue
+    place "$item" "$HOME/.claude/$part/$(basename "$item")"
+  done
 done
 [ -f "$incoming/claude/settings.json" ] && place "$incoming/claude/settings.json" "$HOME/.claude/settings.json"
 

@@ -178,19 +178,26 @@ private struct Command {
         for step in steps where Self.shell(step) != 0 {
             throw Failure.error("Stopped: \(step.prefix(2).joined(separator: " ")) failed. What was replaced on \(host) is in ~/.openaccs/backups.")
         }
+        // A command over ssh doesn't read the login profile, so it gets the PATH server-setup.sh installs into;
+        // a claude or codex installed elsewhere is still found after it.
+        let path = "PATH=$HOME/.local/bin:$HOME/.codex/bin:$PATH"
+        let signIns = [("Claude Code", "\(path) claude auth login"), ("Codex", "\(path) codex login --device-auth")]
         if isatty(STDIN_FILENO) != 0 {
             print("\nEach tool signs in on \(host) itself (your logins on this Mac never travel).")
-            for (tool, command) in [("Claude Code", "~/.local/bin/claude auth login"), ("Codex", "PATH=$HOME/.local/bin:$PATH codex login --device-auth")] {
+            for (tool, command) in signIns {
                 FileHandle.standardError.write(Data("Sign \(tool) in on \(host) now? [Y/n] ".utf8))
                 let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
-                if answer.isEmpty || answer == "y" || answer == "yes" { _ = Self.shell(["/usr/bin/ssh", "-t", host, command]) }
+                if answer.isEmpty || answer == "y" || answer == "yes", Self.shell(["/usr/bin/ssh", "-t", host, command]) != 0 {
+                    print("\(tool) didn't sign in. Try again: ssh -t \(host) '\(command)'")
+                }
             }
         } else {
-            print("\nSign in on \(host): ssh -t \(host) claude auth login, then codex login --device-auth")
+            print("\nSign in on \(host):")
+            for (_, command) in signIns { print("  ssh -t \(host) '\(command)'") }
         }
         print("\nOn \(host):")
         _ = Self.shell(["/usr/bin/ssh", host, """
-            export PATH=$HOME/.local/bin:$PATH; \
+            export \(path); \
             printf '  Claude Code: '; claude auth status >/dev/null 2>&1 && echo signed in || echo not signed in; \
             printf '  Codex: '; codex login status >/dev/null 2>&1 && echo signed in || echo not signed in; \
             printf '  Codex reads: %s\\n' "$(readlink ~/.codex/AGENTS.md)"; \
