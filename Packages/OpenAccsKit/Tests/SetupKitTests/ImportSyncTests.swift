@@ -193,7 +193,9 @@ url = "https://mcp.linear.app/mcp"
             calls.argv.append(argv)
             return nil
         })
-        #expect(calls.argv == [["sqlite3", "-readonly", "-json", home.path(".codex/state_5.sqlite"), ImportSyncSetup.query]])
+        // Immutable, because a plain read-only open fails while ChatGPT has the database open.
+        let database = URL(filePath: home.path(".codex/state_5.sqlite")).absoluteString + "?immutable=1"
+        #expect(calls.argv == [["sqlite3", "-readonly", "-json", database, ImportSyncSetup.query]])
         #expect(noSqlite.summary == "Keep imports in sync is on")
         #expect(noSqlite.changes.map(\.id) == ["importSync.turn-off"] && noSqlite.items.isEmpty)
 

@@ -90,8 +90,11 @@ public enum ImportSyncSetup {
         + "WHERE json_valid(i.successes) AND item_type IN ('SKILLS', 'COMMANDS', 'MCP_SERVER_CONFIG', 'PLUGINS') ORDER BY i.completed_at_ms"
 
     /// Import's ledger in ~/.codex/state_5.sqlite, opened read-only; nil when sqlite3, the database or the table is missing.
+    /// Opened as immutable: while ChatGPT runs, a plain read-only open of its database fails ("unable to open").
+    /// The ledger only grows, so a read that misses the newest writes is fine.
     static func ledger(_ context: SetupContext) -> [Row]? {
-        guard let result = context.run(["sqlite3", "-readonly", "-json", context.url(".codex/state_5.sqlite").path, query]),
+        let database = context.url(".codex/state_5.sqlite").absoluteString + "?immutable=1"
+        guard let result = context.run(["sqlite3", "-readonly", "-json", database, query]),
               result.status == 0 else { return nil }
         // sqlite3 prints nothing at all for no rows.
         if result.output.allSatisfy(\.isWhitespace) { return [] }
