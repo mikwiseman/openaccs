@@ -111,7 +111,7 @@ import Testing
         // Autonomy is never proposed by a scan; each default is its own change.
         #expect(report.changes.map(\.title) == Self.titles)
         #expect(report.changes.map(\.waitsFor) == [nil, nil, .chatGPT])
-        #expect(report.changes.map(\.requires) == [[], ["defaults.keep-chats"], []])
+        #expect(report.changes.map(\.requires) == [[], [], []])
         #expect(report.changes[2].detail == #"+ project_doc_fallback_filenames = ["CLAUDE.md"]"#)
 
     }
@@ -155,15 +155,35 @@ import Testing
             id: "defaults.hide-secrets", name: "Hide .env, ~/.ssh and logins from agents", claude: .same, codex: .notShared, note: "6 of 6 deny rules"))
     }
 
-    @Test func hidingSecretsNeedsKeepChatsWhenBothArePlanned() throws {
-        let home = try macLikeHome()
-        let hide = try #require(DefaultsSetup.scan(home.context()).changes.first { $0.id == "defaults.hide-secrets" })
+    @Test func eachClaudeDefaultAppliesAndUndoesAlone() throws {
+        for (id, other) in [("defaults.hide-secrets", "defaults.keep-chats"), ("defaults.keep-chats", "defaults.hide-secrets")] {
+            let home = try macLikeHome()
+            let applier = SetupApplier(context: home.context())
+            let change = try #require(DefaultsSetup.scan(home.context()).changes.first { $0.id == id })
 
-        let result = SetupApplier(context: home.context()).apply([hide])
+            let entry = try #require(applier.apply([change]).applied.first, "\(id)")
 
-        #expect(result.applied.isEmpty)
-        #expect(result.skipped.first?.reason == "needs “defaults.keep-chats” too")
-        #expect(home.read(".claude/settings.json") == Self.settings)
+            // Only its own key changed: Claude still deletes chats after 30 days, or still has just its own deny rule.
+            let settings = try claudeSettings(home)
+            #expect((settings["cleanupPeriodDays"] != nil) == (id == "defaults.keep-chats"))
+            #expect(((settings["permissions"] as? [String: Any])?["deny"] as? [String])?.count == (id == "defaults.hide-secrets" ? 7 : 1))
+            #expect(DefaultsSetup.scan(home.context()).changes.contains { $0.id == other })
+            try applier.undo(entry.id)
+            #expect(bytes(home, ".claude/settings.json") == Data(Self.settings.utf8))
+        }
+    }
+
+    @Test func aDefaultKeepsWhatClaudeCodeWroteMeanwhileButNotAChangeToItsOwnKey() throws {
+        let home = try macLikeHome(settings: #"{"effortLevel": "high"}"#)
+        let keep = try #require(DefaultsSetup.scan(home.context()).changes.first { $0.id == "defaults.keep-chats" })
+
+        try home.write(".claude/settings.json", #"{"effortLevel": "low"}"#)   // Claude Code wrote meanwhile
+        #expect(SetupApplier(context: home.context()).apply([keep]).applied.count == 1)
+        #expect(try claudeSettings(home)["effortLevel"] as? String == "low" && claudeSettings(home)["cleanupPeriodDays"] as? Int == 3650)
+
+        try home.write(".claude/settings.json", #"{"cleanupPeriodDays": 60}"#)   // the user picked another value
+        #expect(SetupApplier(context: home.context()).apply([keep]).skipped.first?.reason == "changed since you reviewed it")
+        #expect(home.read(".claude/settings.json") == #"{"cleanupPeriodDays": 60}"#)
     }
 
     @Test func codexReadsClaudeMDAddedToTheTopLevelOnly() throws {

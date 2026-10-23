@@ -44,18 +44,12 @@ public enum DefaultsSetup {
                                note: "Claude \(claudeName), Codex \(codexName)"))
 
         if let object = claude.object {
-            // Both write settings.json: the second is planned on what the first leaves and needs it, so both apply in one go.
-            var planned = object, leaves = claude.state, previous: String?
-            func plan(_ id: String, _ title: String, _ detail: String, _ edit: (inout [String: Any]) -> Void) {
-                var next = planned
-                edit(&next)
-                guard let data = ClaudeAppSetup.serialize(next) else { return }
-                changes.append(SetupChange(id: id, area: .defaults, title: title, detail: detail,
-                                           operations: [.write(path: claude.url.path, contents: data, expected: leaves)],
-                                           requires: previous.map { [$0] } ?? []))
-                planned = next
-                leaves = .file(contents: data)
-                previous = id
+            // Each sets only its own key of settings.json when it applies, so either applies alone and both apply together.
+            func plan(_ id: String, _ title: String, _ detail: String, key: String, _ value: Any) {
+                guard let text = SetupApplier.jsonText(value) else { return }
+                changes.append(SetupChange(id: id, area: .defaults, title: title, detail: detail, operations: [
+                    .json(path: claude.url.path, key: key, value: text, expected: SetupApplier.jsonText(object[key])),
+                ]))
             }
 
             let days = object["cleanupPeriodDays"]
@@ -66,9 +60,8 @@ public enum DefaultsSetup {
             if !keeps {
                 plan("defaults.keep-chats", "Keep Claude chats for 10 years",
                      "Sets cleanupPeriodDays to \(keepDays) in ~/.claude/settings.json (now \(days.map { "\($0)" } ?? "not set")). "
-                         + "Claude deletes chats after 30 days by default, and OpenAccs's shared history reads them. Every other key and value stays.") {
-                    $0["cleanupPeriodDays"] = keepDays
-                }
+                         + "Claude deletes chats after 30 days by default, and OpenAccs's shared history reads them. Every other key and value stays.",
+                     key: "cleanupPeriodDays", keepDays)
             }
 
             let deny = claude.permissions["deny"] as? [Any] ?? []
@@ -77,13 +70,12 @@ public enum DefaultsSetup {
             items.append(SetupItem(id: "defaults.hide-secrets", name: "Hide .env, ~/.ssh and logins from agents", claude: missing.isEmpty ? .same : .missing,
                                    codex: .notShared, note: "\(denyRules.count - missing.count) of \(denyRules.count) deny rules"))
             if !missing.isEmpty {
+                var permissions = claude.permissions
+                permissions["deny"] = deny + missing
                 plan("defaults.hide-secrets", "Hide .env, ~/.ssh and logins from agents",
                      "Adds deny rules for Claude's Read tool in ~/.claude/settings.json: \(missing.joined(separator: ", ")). "
-                         + "Every other key and value stays.") { object in
-                    var permissions = object["permissions"] as? [String: Any] ?? [:]
-                    permissions["deny"] = (permissions["deny"] as? [Any] ?? []) + missing
-                    object["permissions"] = permissions
-                }
+                         + "Every other key and value stays.",
+                     key: "permissions", permissions)
             }
         } else {
             attention.append(Attention(id: "defaults.claude-settings", text: "Can't read ~/.claude/settings.json", level: .broken))

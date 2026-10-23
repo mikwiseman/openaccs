@@ -158,4 +158,86 @@ final class Calls: @unchecked Sendable {
         #expect(throws: SetupError.changedSince) { try applier.undo(result.applied[0].id) }
         #expect(home.read("CLAUDE.md") == "three")
     }
+
+    @Test func undoWaitsWhileItsAppRuns() throws {
+        let home = try SetupHome()
+        let profile = home.path("Profiles/ai41")
+        let file = try home.write("Profiles/ai41/claude_desktop_config.json", "{}")
+        let change = SetupChange(id: "claudeApp.ai41", area: .claudeApp, title: "ai41 gets 1 setting", operations: [
+            .write(path: file, contents: Data(#"{"a":1}"#.utf8), expected: FileState.of(URL(filePath: file))),
+        ], waitsFor: .claude(profile))
+        let entry = try #require(SetupApplier(context: home.context()).apply([change]).applied.first)
+
+        // Opened again since: the app would save its copy over the undo.
+        #expect(throws: SetupError.appRunning("the Claude window using ai41")) {
+            try SetupApplier(context: home.context(running: [.claude(profile)])).undo(entry.id)
+        }
+        #expect(home.read("Profiles/ai41/claude_desktop_config.json") == #"{"a":1}"#)
+        try SetupApplier(context: home.context()).undo(entry.id)
+        #expect(home.read("Profiles/ai41/claude_desktop_config.json") == "{}")
+    }
+
+    @Test func historyFromBeforeChangeIDsStillLoadsAndUndoes() throws {
+        let home = try SetupHome()
+        let file = try home.write("CLAUDE.md", "one")
+        let applier = SetupApplier(context: home.context())
+        _ = applier.apply([SetupChange(id: "x", area: .instructions, title: "x", operations: [
+            .write(path: file, contents: Data("two".utf8), expected: FileState.of(URL(filePath: file))),
+        ], waitsFor: .chatGPT)])
+        // As OpenAccs 0.4.0 saved it, without the keys added since.
+        var saved = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: applier.historyFile)) as? [[String: Any]])
+        for key in ["changeID", "requires", "waitsFor"] { saved[0][key] = nil }
+        try JSONSerialization.data(withJSONObject: saved).write(to: applier.historyFile)
+
+        let entry = try #require(applier.history().first)
+        #expect(entry.changeID == nil && entry.requires == nil && entry.waitsFor == nil)
+        try applier.undo(entry.id)
+        #expect(home.read("CLAUDE.md") == "one")
+    }
+
+    @Test func undoWithItsBackupGoneChangesNothing() throws {
+        let home = try SetupHome()
+        let file = try home.write(".claude/settings.json", "{}")
+        let applier = SetupApplier(context: home.context())
+        let entry = try #require(applier.apply([SetupChange(id: "x", area: .defaults, title: "x", operations: [
+            .write(path: file, contents: Data(#"{"cleanupPeriodDays":3650}"#.utf8), expected: FileState.of(URL(filePath: file))),
+        ])]).applied.first)
+        try FileManager.default.removeItem(at: home.context().paths.backupsDir)   // Backups cleared by hand
+
+        for _ in 0..<2 { #expect(throws: SetupError.backupGone) { try applier.undo(entry.id) } }
+        #expect(home.read(".claude/settings.json") == #"{"cleanupPeriodDays":3650}"#)
+        #expect(applier.history().first?.undoneAt == nil)
+    }
+
+    @Test func aFailedUndoPutsBackWhatItDid() throws {
+        let home = try SetupHome()
+        let file = try home.write("a.md", "before")
+        let applier = SetupApplier(context: home.context { argv in (argv.first == "fail" ? 1 : 0, "") })
+        let entry = try #require(applier.apply([SetupChange(id: "x", area: .mcp, title: "x", operations: [
+            .command(argv: ["add"], undo: ["fail"]),
+            .write(path: file, contents: Data("after".utf8), expected: FileState.of(URL(filePath: file))),
+        ])]).applied.first)
+
+        // Undo puts a.md back first, then the command fails: a.md goes back to what Apply left.
+        #expect(throws: SetupError.commandFailed("fail")) { try applier.undo(entry.id) }
+        #expect(home.read("a.md") == "after")
+        #expect(applier.history().first?.undoneAt == nil)
+    }
+
+    @Test func aBackupThatCantBeCopiedLeavesTheFileInPlace() throws {
+        let home = try SetupHome()
+        let file = try home.write("a.md", "before")
+        let applier = SetupApplier(context: home.context())
+        let entry = try #require(applier.apply([SetupChange(id: "x", area: .instructions, title: "x", operations: [
+            .write(path: file, contents: Data("after".utf8), expected: FileState.of(URL(filePath: file))),
+        ])]).applied.first)
+        guard case .restore(_, let backup, _)? = entry.undo.first else { Issue.record("no backup"); return }
+        // Unreadable, so copying it back fails the way a full disk would.
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: backup)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup) }
+
+        #expect(throws: (any Error).self) { try applier.undo(entry.id) }
+        #expect(home.read("a.md") == "after")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: home.url.path).sorted() == ["Library", "a.md"])
+    }
 }
