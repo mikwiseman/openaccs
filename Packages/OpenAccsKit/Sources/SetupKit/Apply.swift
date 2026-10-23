@@ -61,7 +61,7 @@ public struct SetupApplier: Sendable {
                 continue
             }
             if let app = change.waitsFor, context.isRunning(app) {
-                result.skipped.append((change, "waits for \(Self.name(app)) to close"))
+                result.skipped.append((change, "waits for \(name(app)) to close"))
                 continue
             }
             guard isAsPlanned(change.operations) else {
@@ -92,7 +92,7 @@ public struct SetupApplier: Sendable {
         var all = history()
         guard let i = all.firstIndex(where: { $0.id == id }), all[i].undoneAt == nil else { throw SetupError.nothingToUndo }
         let entry = all[i]
-        if let app = entry.waitsFor, context.isRunning(app) { throw SetupError.appRunning(Self.name(app)) }
+        if let app = entry.waitsFor, context.isRunning(app) { throw SetupError.appRunning(name(app)) }
         if let change = entry.changeID,
            let later = all[(i + 1)...].first(where: { $0.undoneAt == nil && $0.requires?.contains(change) == true }) {
             throw SetupError.neededBy(later.title)
@@ -268,11 +268,11 @@ public struct SetupApplier: Sendable {
             .map { String(decoding: $0, as: UTF8.self) }
     }
 
-    static func name(_ app: SetupApp) -> String {
-        switch app {
-        case .chatGPT: "ChatGPT"
-        case .claude(let dir): "the Claude window using \((dir as NSString).lastPathComponent)"
-        }
+    /// The app as the user knows it: a Claude profile by its name in OpenAccs.
+    func name(_ app: SetupApp) -> String {
+        guard case .claude(let dir) = app else { return "ChatGPT" }
+        let accounts = (try? AccountStore(file: context.paths.accountsFile).load()) ?? []
+        return "the Claude window using \(ClaudeAppSetup.name(of: ClaudeProfileRef(dataDir: URL(filePath: dir)), in: accounts, context: context))"
     }
 
     static func stamp(_ date: Date) -> String {

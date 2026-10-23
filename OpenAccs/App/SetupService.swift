@@ -7,10 +7,10 @@ import SetupKit
 /// One setup on this Mac: the context OpenAccs's own accounts give, for the Settings window and `openaccs setup`.
 enum SetupService {
     /// Claude profiles come from accounts.json (the one used last first), each with the account its app shows.
-    static func context(paths: Paths = .current, lastClaude: UUID? = nil) -> SetupContext {
+    static func context(paths: Paths = .current) -> SetupContext {
         let accounts = (try? AccountStore(file: paths.accountsFile).load()) ?? []
         var claude = accounts.filter { $0.provider == .claude && $0.claude != nil && $0.claude?.legacyConfigDir == nil }
-        if let lastClaude = lastClaude ?? savedLastClaude(), let i = claude.firstIndex(where: { $0.id == lastClaude }) {
+        if let lastClaude = savedLastClaude(), let i = claude.firstIndex(where: { $0.id == lastClaude }) {
             claude.insert(claude.remove(at: i), at: 0)
         }
         let profiles = ClaudeProfiles(paths: paths)

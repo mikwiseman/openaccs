@@ -178,6 +178,32 @@ import Testing
         #expect(MCPSetup.translate(codex: .table(["url": .string("https://developer.example.com/mcp?branch=main")])).spec != nil)
     }
 
+    @Test func keysKeptInAToolsOwnFieldsAreHiddenInDetails() throws {
+        let home = try SetupHome()
+        let secret = "FAKE-SECRET-91c2"
+        try home.write(".claude.json", #"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp","headers":{"X-Api-Key":"${LINEAR_KEY}"}}}}"#)
+        try home.write(".codex/config.toml", """
+            [mcp_servers.linear]
+            url = "https://mcp.linear.app/mcp"
+            env_http_headers = { "X-Api-Key" = "LINEAR_KEY" }
+
+            [mcp_servers.linear.oauth]
+            client_id = "openaccs-test"
+            client_secret = "\(secret)"
+            """)
+        let context = home.context()
+        #expect(SetupApplier(context: context).apply(MCPSetup.scan(context).changes).applied.count == 1)   // remembers linear
+        try home.write(".claude.json", #"{"mcpServers":{"other":{"type":"http","url":"https://example.org/mcp"}}}"#)   // then removed from Claude
+
+        let report = MCPSetup.scan(context)
+        let removal = try #require(report.changes.first { $0.id == "mcp.codex.removed.linear" })
+
+        let detail = try #require(removal.detail)
+        #expect(detail.contains("client_secret") && detail.contains("openaccs-test") && detail.contains("LINEAR_KEY"))
+        let shown = [report.summary] + report.attention.map(\.text) + report.items.compactMap(\.note) + report.changes.flatMap { [$0.title, $0.detail ?? ""] }
+        #expect(!shown.joined().contains(secret))
+    }
+
     @Test func aNameClaudeRefusesStaysInCodexAndTheOthersStillReachClaude() throws {
         let home = try SetupHome()
         try home.write(".codex/config.toml", """

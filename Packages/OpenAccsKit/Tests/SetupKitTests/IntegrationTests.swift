@@ -157,7 +157,7 @@ import Testing
         let context = home.context(run: claudeLike(home))
         let applier = SetupApplier(context: context)
         #expect(applier.apply(MCPSetup.scan(context).changes).applied.count == 1)   // remembers eye as the same in both
-        try home.write(".codex/config.toml", "")   // then removed from Codex
+        try home.write(".codex/config.toml", "[mcp_servers.other]\ncommand = \"other\"\n")   // then removed from Codex
         let removal = try #require(MCPSetup.scan(context).changes.first { $0.id == "mcp.claude.removed.eye" })
         let entry = try #require(applier.apply([removal]).applied.first)
         #expect(MCPSetup.readClaude(context)?.servers["eye"] == nil)

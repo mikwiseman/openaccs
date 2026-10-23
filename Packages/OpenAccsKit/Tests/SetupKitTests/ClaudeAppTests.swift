@@ -464,6 +464,8 @@ func value(_ object: [String: Any]?, _ place: [String]) -> NSObject? {
 
         #expect(report.items.map(\.name) == ["hi@waiwai.is", "ai41"])
         #expect(report.changes.last?.title == "ai41 gets 8 settings from hi@waiwai.is")
+        let running = home.claudeContext([hi, ai41], running: [.claude(ai41.dataDir.path)])
+        #expect(SetupApplier(context: running).apply(report.changes).skipped.map(\.reason) == ["waits for the Claude window using ai41 to close"])
     }
 
     @Test func seedGivesANewProfileTheSharedSettingsThatBelongToNoAccount() throws {

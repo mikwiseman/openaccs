@@ -91,7 +91,7 @@ private struct Command {
     /// Scans and applies here, not in the app: scanning only reads, and every change checks its files first.
     func setup() throws {
         try allow(["--json", "--yes", "--dry-run"])
-        let context = SetupService.context(lastClaude: UserDefaults.standard.string(forKey: "lastClaude").flatMap(UUID.init))
+        let context = SetupService.context()
         let applier = SetupApplier(context: context)
         switch args.first {
         case nil:

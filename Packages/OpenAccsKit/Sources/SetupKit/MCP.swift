@@ -439,6 +439,42 @@ public enum MCPSetup {
         return ["key", "token", "secret", "password", "passwd", "auth", "authorization", "credential", "credentials"].contains { letters.hasSuffix($0) }
     }
 
+    /// For details on screen: a value under a name that says it is a key, after a flag named like one, or that holds
+    /// one, as "••••". A `${VAR}` reference stays, and so do env_http_headers, whose values are variable names.
+    static func masked(_ value: Any, named name: String = "") -> Any {
+        switch value {
+        case let object as [String: Any] where name != "env_http_headers":
+            return Dictionary(uniqueKeysWithValues: object.map { ($0.key, masked($0.value, named: $0.key)) })
+        case let list as [Any]:
+            return list.indices.map { masked(list[$0], named: $0 > 0 ? flag(list[$0 - 1] as? String) ?? name : name) }
+        case let text as String:
+            return hides(text, named: name) ? "••••" : text
+        default:
+            return value
+        }
+    }
+
+    static func masked(_ value: TOMLValue, named name: String = "") -> TOMLValue {
+        switch value {
+        case .table(let table) where name != "env_http_headers":
+            return .table(Dictionary(uniqueKeysWithValues: table.map { ($0.key, masked($0.value, named: $0.key)) }))
+        case .array(let list):
+            return .array(list.indices.map { masked(list[$0], named: $0 > 0 ? flag(list[$0 - 1].string) ?? name : name) })
+        case .string(let text):
+            return hides(text, named: name) ? .string("••••") : value
+        default:
+            return value
+        }
+    }
+
+    private static func flag(_ argument: String?) -> String? {
+        argument.flatMap { $0.hasPrefix("-") && namesAKey($0) ? $0 : nil }
+    }
+
+    private static func hides(_ text: String, named name: String) -> Bool {
+        !text.contains("${") && (namesAKey(name) || holdsKey(arguments: [text]))
+    }
+
     /// A long run of letters and digits with none of the marks a word, a path or a package name has, as most keys are.
     static func looksLikeKey(_ text: String) -> Bool {
         text.count >= 32 && text.wholeMatch(of: /[A-Za-z0-9_+=-]+/) != nil && text.contains(where: \.isLetter) && text.contains(where: \.isNumber)
@@ -536,17 +572,18 @@ public enum MCPSetup {
         return String(decoding: (try? JSONSerialization.data(withJSONObject: object, options: options)) ?? Data(), as: UTF8.self)
     }
 
-    /// What writing `spec` (nil: removing it) changes on `tool`'s side, as a line diff of that side's own text.
+    /// What writing `spec` (nil: removing it) changes on `tool`'s side, as a line diff of that side's own text, keys
+    /// hidden.
     static func diff(_ name: String, to spec: MCPSpec?, on tool: Tool, claude: ClaudeConfig, codex: [String: TOMLValue]) -> String {
         switch tool {
         case .claude:
             let old = claude.servers[name] as? [String: Any]
-            return InstructionsSetup.lineDiff(old.map { json($0, pretty: true) } ?? "",
-                                              spec.map { json(claudeEntry($0, keeping: old ?? [:]), pretty: true) } ?? "")
+            return InstructionsSetup.lineDiff(old.map { json(masked($0), pretty: true) } ?? "",
+                                              spec.map { json(masked(claudeEntry($0, keeping: old ?? [:])), pretty: true) } ?? "")
         case .codex:
             let old = codex[name]?.table, at = ["mcp_servers", name]
-            return InstructionsSetup.lineDiff(old.map { TOMLFile.render($0, at: at) } ?? "",
-                                              spec.map { TOMLFile.render(codexTable($0, keeping: old ?? [:]), at: at) } ?? "")
+            func text(_ table: [String: TOMLValue]) -> String { TOMLFile.render(masked(.table(table)).table ?? [:], at: at) }
+            return InstructionsSetup.lineDiff(old.map(text) ?? "", spec.map { text(codexTable($0, keeping: old ?? [:])) } ?? "")
         }
     }
 
