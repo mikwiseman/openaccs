@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>OpenAccs</title>
         <item>
+            <title>0.4.1</title>
+            <pubDate>Fri, 23 Oct 2026 17:19:36 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.4.1</sparkle:version>
+            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[Safer One setup. Apply and Undo are safe to use again.
+
+- Undo is all or nothing. It waits while the app that owns the file is open, or while a later change still needs it.
+- Each Claude default applies on its own, and keeps what Claude Code changed in the same file meanwhile.
+- MCP servers: Codex configs stay loadable when a server changes from command to URL. Keys in arguments, URLs or a tool's own fields are never copied and never shown. One server Claude refuses no longer blocks the others. A side that was reset removes nothing from the other.
+- `openaccs vps`: keys and Mac-only settings stay off the server, and what you change on the server is kept on later runs.
+- An old ~/.agents.md that other tools link to is kept. Editing a linked CLAUDE.md keeps the link. Errors show where you are looking.
+- Messages name Claude windows the way OpenAccs does.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.1/OpenAccs-0.4.1.zip" length="4983983" type="application/octet-stream" sparkle:edSignature="/AgKFB0rPmmHGvZ46su5dyl7adHR1X8LmM6/DkZJhq5CJuNIgnflouXkdLwy9PRhHcGdZT1V4BQH7bo8zCIrCA=="/>
+        </item>
+        <item>
             <title>0.4.0</title>
             <pubDate>Fri, 23 Oct 2026 12:44:04 +0300</pubDate>
             <link>https://github.com/mikwiseman/openaccs</link>
@@ -52,6 +70,6 @@ Download `OpenAccs-0.3.3.zip` below, unzip it and move `OpenAccs.app` to Applica
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 43QsRmk955mtPbZIMi15epmZ6NWnYmnr6bENa5g2yyCtl3cbYnjLhh2lD+xMdq0osG2//8BW57I9SZsRxkYPCA==
-length: 4158
+edSignature: s587MwSK2MxduIY0futQxcRY5L6ehyVKaCSt0dduToEbYi1LLmBUbKimD0J7l6W+2q3Vp3Cbint/+8lSLuAUCw==
+length: 5772
 -->
