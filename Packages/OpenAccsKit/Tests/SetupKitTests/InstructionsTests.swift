@@ -214,6 +214,46 @@ import Testing
         #expect(report.changes[1].operations == [.remove(path: home.path("AGENTS.md"), expected: .link(target: home.path(".agents.md")))])
     }
 
+    @Test func anOldCopyOtherToolsReadThroughLinksStaysAndSaysWhichOnes() throws {
+        // Like this Mac: Gemini CLI and opencode read ~/.agents.md through links, one of them relative.
+        let home = try macLikeHome()
+        try link(home, ".gemini/GEMINI.md", to: home.path(".agents.md"))
+        try link(home, ".config/opencode/AGENTS.md", to: "../../.agents.md")
+
+        let report = InstructionsSetup.scan(home.context())
+
+        #expect(report.changes.map(\.id) == ["instructions.link-codex", "instructions.remove-home-copy"])
+        #expect(report.items.last == SetupItem(id: "instructions.old-copy", name: "~/.agents.md", claude: .notShared, codex: .differs,
+                                               note: "Kept: ~/.config/opencode/AGENTS.md and ~/.gemini/GEMINI.md link to it · 12 lines"))
+        let result = SetupApplier(context: home.context()).apply([report].recommendedChanges)
+        #expect(result.applied.count == 2)
+        #expect(home.read(".gemini/GEMINI.md") == Self.older && home.read(".config/opencode/AGENTS.md") == Self.older)
+    }
+
+    @Test func savingThroughALinkWritesTheFileItPointsAtAndKeepsTheLink() throws {
+        let home = try SetupHome()
+        let real = try home.write("dotfiles/CLAUDE.md", "# Mine\n")
+        try link(home, ".claude/CLAUDE.md", to: real)
+        let applier = SetupApplier(context: home.context())
+
+        let result = applier.apply([InstructionsSetup.edit(home.context(), from: "# Mine\n", to: "# Mine\nBe brief.\n")])
+
+        #expect(result.applied.count == 1 && result.skipped.isEmpty)
+        #expect(home.linkTarget(".claude/CLAUDE.md") == real)
+        #expect(home.read("dotfiles/CLAUDE.md") == "# Mine\nBe brief.\n")
+        // Planned from text that is no longer there: refused, and nothing changes.
+        let stale = applier.apply([InstructionsSetup.edit(home.context(), from: "# Mine\n", to: "# Other\n")])
+        #expect(stale.skipped.map(\.reason) == ["changed since you reviewed it"])
+        try applier.undo(result.applied[0].id)
+        #expect(home.linkTarget(".claude/CLAUDE.md") == real && home.read("dotfiles/CLAUDE.md") == "# Mine\n")
+    }
+
+    @Test func savingANewFileCreatesIt() throws {
+        let home = try SetupHome()
+        let result = SetupApplier(context: home.context()).apply([InstructionsSetup.edit(home.context(), from: "", to: "# Mine\n")])
+        #expect(result.applied.count == 1 && home.read(".claude/CLAUDE.md") == "# Mine\n")
+    }
+
     @Test func codexTextBecomesClaudeMDWordForWord() throws {
         let home = try SetupHome()
         try home.write(".claude/settings.json", "{}")

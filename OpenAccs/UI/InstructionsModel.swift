@@ -28,8 +28,8 @@ final class InstructionsModel {
     private(set) var texts: [String: String] = [:]
     private(set) var feedFailed = false
     private(set) var merging = false
-    /// A merge waiting for the user to look at it: the file it would save.
-    var proposal: String?
+    /// A merge waiting for the user to look at it: the file it would save. A new one starts with no old message.
+    var proposal: String? { didSet { if proposal != nil, oldValue == nil { message = nil } } }
     private(set) var message: String?
 
     @ObservationIgnored private let makeContext: @MainActor () -> SetupContext
@@ -44,6 +44,7 @@ final class InstructionsModel {
     func load() {
         saved = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
         draft = saved
+        message = nil
     }
 
     /// The gallery, from the feed next to the update feed (so it can grow without a new version).
@@ -68,14 +69,10 @@ final class InstructionsModel {
 
     /// Saves through Setup's apply, so it lands in History with Undo, and only if nobody changed the file since.
     func save(_ text: String) {
-        let context = makeContext(), path = file.path
-        let expected = saved.isEmpty && !FileManager.default.fileExists(atPath: path) ? FileState.absent
-            : FileState.file(contents: Data(saved.utf8))
-        let change = SetupChange(id: "instructions.edit", area: .instructions, title: "Edited your instructions",
-                                 operations: [.write(path: path, contents: Data(text.utf8), permissions: 0o644, expected: expected)])
-        let result = SetupApplier(context: context).apply([change])
-        if result.applied.isEmpty {
-            message = "Not saved: the file changed since you opened it. Reload to see it."
+        let context = makeContext()
+        let result = SetupApplier(context: context).apply([InstructionsSetup.edit(context, from: saved, to: text)])
+        if let skipped = result.skipped.first {
+            message = "Not saved: \(skipped.reason.trimmingCharacters(in: CharacterSet(charactersIn: ".")))."
         } else {
             message = nil
             saved = text
@@ -89,6 +86,7 @@ final class InstructionsModel {
     func adopt(_ rules: [String], from author: String) async {
         guard !rules.isEmpty, !merging else { return }
         merging = true
+        message = nil
         defer { merging = false }
         let mine = draft.isEmpty ? saved : draft
         let prompt = """
@@ -111,7 +109,11 @@ final class InstructionsModel {
                          "--setting-sources", "", "--disable-slash-commands", prompt])
         }.value
         guard let result, result.status == 0, !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            message = result == nil ? "Adopting needs Claude Code (~/.local/bin/claude)." : "Claude Code couldn't merge them. Nothing changed."
+            message = switch result?.status {
+            case nil: "Adopting needs Claude Code (~/.local/bin/claude)."
+            case -1: "Claude Code took over three minutes, so it was stopped. Nothing changed."
+            default: "Claude Code couldn't merge them. Nothing changed."
+            }
             return
         }
         proposal = result.output.hasSuffix("\n") ? result.output : result.output + "\n"

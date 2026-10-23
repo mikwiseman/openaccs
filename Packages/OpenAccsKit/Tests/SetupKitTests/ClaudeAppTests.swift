@@ -340,6 +340,51 @@ func value(_ object: [String: Any]?, _ place: [String]) -> NSObject? {
         #expect(ClaudeAppSetup.scan(stopped).changes.isEmpty)
     }
 
+    @Test func aProfileClosedBetweenScanAndApplyRecordsWhatItWasWritten() throws {
+        let home = try SetupHome()
+        let hi = try home.claudeProfile("hi", account: "acct-hi", config: ClaudeConfigs.hi)
+        let ai41 = try home.claudeProfile("ai41", account: "acct-41", config: ClaudeConfigs.ai41)
+        let stopped = home.claudeContext([hi, ai41])
+        #expect(SetupApplier(context: stopped).apply(ClaudeAppSetup.scan(stopped).changes).skipped.isEmpty)
+        try home.set(hi, ["preferences", "menuBarEnabled"], to: true, modified: Date() + 100)
+
+        // Scanned while ai41 runs; the user quits it, as its row asks, and applies that plan.
+        let plan = ClaudeAppSetup.scan(home.claudeContext([hi, ai41], running: [.claude(ai41.dataDir.path)]))
+        #expect(plan.changes.map(\.title) == ["ai41 gets 1 setting from hi"])
+        #expect(SetupApplier(context: stopped).apply(plan.changes).skipped.isEmpty)
+        #expect(ClaudeAppSetup.scan(stopped).changes.isEmpty)
+
+        // Turning it back off in ai41 is a change of its own, so it spreads instead of being undone.
+        try home.set(ai41, ["preferences", "menuBarEnabled"], to: false, modified: Date() + 200)
+        #expect(ClaudeAppSetup.scan(stopped).changes.map(\.title) == ["hi gets 1 setting from ai41"])
+    }
+
+    @Test func profilesWithTheSameNameGetChangesOfTheirOwn() throws {
+        let home = try SetupHome()
+        let main = try home.claudeProfile(at: "Library/Application Support/Claude", account: "acct-hi", config: ClaudeConfigs.hi)
+        let one = try home.claudeProfile(at: "Library/Application Support/OpenAccs/Claude/A1/Data", account: "acct-41", config: ClaudeConfigs.ai41)
+        let two = try home.claudeProfile(at: "Library/Application Support/OpenAccs/Claude/A2/Data", account: "acct-42", config: ClaudeConfigs.ai42)
+        try home.write("Library/Application Support/OpenAccs/accounts.json", """
+        [
+          {"id": "6D2C1F7E-3E59-4C1B-9A57-0B8E5C2F1A01", "provider": "claude", "label": "Main", "color": 0, "createdAt": "2026-10-01T00:00:00Z", "claude": {}},
+          {"id": "6D2C1F7E-3E59-4C1B-9A57-0B8E5C2F1A02", "provider": "claude", "label": "Claude", "color": 1, "createdAt": "2026-10-01T00:00:00Z",
+           "claude": {"dataDir": "\(one.dataDir.path)"}},
+          {"id": "6D2C1F7E-3E59-4C1B-9A57-0B8E5C2F1A03", "provider": "claude", "label": "claude", "color": 2, "createdAt": "2026-10-01T00:00:00Z",
+           "claude": {"dataDir": "\(two.dataDir.path)"}}
+        ]
+        """)
+        let context = home.claudeContext([main, one, two])
+
+        let ids = ClaudeAppSetup.scan(context).changes.map(\.id)
+
+        #expect(ids.count == 3 && Set(ids).count == 3)
+        #expect(ids[0] == "claudeApp.main" && ids.dropFirst().allSatisfy { $0.hasPrefix("claudeApp.claude-") })
+        #expect(ClaudeAppSetup.scan(context).changes.map(\.id) == ids)   // the same on every scan
+        let result = SetupApplier(context: context).apply(ClaudeAppSetup.scan(context).changes.filter { $0.id == ids[2] })
+        #expect(result.applied.count == 1)
+        #expect(home.read("Library/Application Support/OpenAccs/Claude/A1/Data/claude_desktop_config.json") == ClaudeConfigs.ai41)
+    }
+
     @Test func aProfileNewToTheSyncTakesTheAgreedValuesAndAddsWhatOnlyItHas() throws {
         let home = try SetupHome()
         let hi = try home.claudeProfile("hi", account: "acct-hi", config: ClaudeConfigs.hi)
