@@ -1,5 +1,5 @@
 /// A TOML value as Codex writes it in ~/.codex/config.toml. Dates and times are left out: Codex never writes them.
-public indirect enum TOMLValue: Hashable, Sendable {
+public indirect enum TOMLValue: Codable, Hashable, Sendable {
     case string(String)
     case integer(Int)
     case float(Double)

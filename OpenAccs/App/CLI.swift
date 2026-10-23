@@ -111,13 +111,16 @@ private struct Command {
         case "apply":
             let reports = OneSetup.scan(context)
             let ids = Set(args.dropFirst())
-            let named = reports.changes.filter { ids.contains($0.id) }
-            let needed = Set(named.flatMap(\.requires))
-            let chosen = ids.isEmpty ? reports.recommendedChanges : reports.changes.filter { ids.contains($0.id) || needed.contains($0.id) }
+            let needed = reports.changes.includingRequirements(ids)
+            let chosen = ids.isEmpty ? reports.recommendedChanges : reports.changes.filter { needed.contains($0.id) }
             if let unknown = ids.subtracting(reports.changes.map(\.id)).sorted().first {
                 throw Failure.usage("No change “\(unknown)”. Run openaccs setup to list them.")
             }
             guard !chosen.isEmpty else { return print("Nothing to change.") }
+            let chosenIDs = Set(chosen.map(\.id))
+            if let conflict = reports.attention.first(where: { $0.fixes.count > 1 && chosenIDs.intersection($0.fixes).count > 1 }) {
+                throw Failure.usage("Choose one option for: \(conflict.text)")
+            }
             for change in chosen { print("  \(change.title)\(change.waitsFor == nil ? "" : " (once that app is closed)")") }
             if flags.contains("--dry-run") { return }
             try confirm("Apply \(chosen.count) change\(chosen.count == 1 ? "" : "s")?")

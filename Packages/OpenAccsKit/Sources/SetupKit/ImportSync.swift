@@ -7,7 +7,7 @@ import Foundation
 /// ~/AGENTS.md, which Import also writes, is left to Instructions.
 public enum ImportSyncSetup {
     public static func scan(_ context: SetupContext) -> AreaReport {
-        let configFile = context.url(".codex/config.toml")
+        let configFile = context.url(".codex/config.toml").resolvingSymlinksInPath()
         let configData = try? Data(contentsOf: configFile)
         let config = configData.flatMap { String(data: $0, encoding: .utf8) }.flatMap(TOMLFile.init(text:))
         let sync = config?.value(syncKey, in: ["desktop"])
@@ -16,7 +16,7 @@ public enum ImportSyncSetup {
 
         var attention: [Attention] = [], changes: [SetupChange] = [], items: [SetupItem] = []
         let isOn = sync == .bool(true)
-        if isOn, let configData, var edited = config {
+        if isOn, var edited = config {
             let id = "importSync.turn-off"
             let fixable = edited.set(syncKey, .bool(false), in: ["desktop"])
             attention.append(Attention(id: "importSync.on", text: "ChatGPT Import still copies Claude into Codex", fixes: fixable ? [id] : []))
@@ -24,7 +24,7 @@ public enum ImportSyncSetup {
                 changes.append(SetupChange(
                     id: id, area: .importSync, title: "Turn off ChatGPT's Keep imports in sync",
                     detail: "In ~/.codex/config.toml, \(syncKey) under [desktop] becomes false. Nothing else in the file changes.",
-                    operations: [.write(path: configFile.path, contents: Data(edited.text.utf8), expected: .file(contents: configData))],
+                    operations: [.toml(path: configFile.path, table: ["desktop"], key: syncKey, value: .bool(false), expected: sync)],
                     waitsFor: .chatGPT))
             }
         }
@@ -54,7 +54,8 @@ public enum ImportSyncSetup {
                     id: "importSync.remove-copies", area: .importSync,
                     title: copies.count == 1 ? "Remove 1 skill ChatGPT Import copied" : "Remove \(copies.count) skills ChatGPT Import copied",
                     detail: "These folders in ~/.agents/skills go to Backups:\n" + copies.map { "\($0.name): \($0.why)" }.joined(separator: "\n"),
-                    operations: copies.map { .remove(path: agentsDir.appending(path: $0.name).path, expected: .folder) }))
+                    operations: copies.map { .remove(path: agentsDir.appending(path: $0.name).path, expected: .folder) },
+                    requires: isOn ? ["importSync.turn-off"] : []))
             }
             items = copies.map { SetupItem(id: "importSync.skill.\($0.name)", name: $0.name, claude: .notShared, codex: .same, note: $0.why) }
             for (type, id, name) in [("MCP_SERVER_CONFIG", "importSync.mcp", "MCP servers"), ("PLUGINS", "importSync.plugins", "Plugins")] {

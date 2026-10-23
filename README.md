@@ -58,6 +58,8 @@ The Instructions window edits your file, shows instruction files that people pub
 
 From the terminal: `openaccs setup`, `openaccs setup apply [--dry-run]`, `openaccs setup history` and `openaccs setup undo <n>`.
 
+For a Linux server, preview with `openaccs vps user@host --dry-run`, then run `openaccs vps user@host` to install the tools and copy the portable setup. Use a non-root SSH user. Each tool signs in on the server itself; Mac logins and literal keys stay on the Mac. Codex device-code login must be enabled for that account.
+
 ### See usage limits for Claude, Codex, Grok, Kimi and Z.ai
 
 Each account row shows how much is left of each limit and when it resets. A full bar means the limit is untouched, and it empties as you use it. A bar turns orange when 20% or less is left. An empty limit shows "Empty" in red and when it comes back. A small star (✦) marks the account with the most left for each product, or, when all of them are empty, the one that comes back first. The menu bar icon has two rings for what's left of the 5-hour and weekly limits of the Claude account you used last.

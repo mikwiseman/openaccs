@@ -46,7 +46,14 @@ final class SetupModel {
 
     /// Applies the chosen changes from the last scan, then scans again.
     func apply(_ ids: Set<String>) async {
-        let chosen = changes.filter { ids.contains($0.id) }
+        await applyChanges(changes.filter { ids.contains($0.id) })
+    }
+
+    func autonomyChanges(to level: DefaultsSetup.Autonomy) -> [SetupChange] {
+        DefaultsSetup.autonomyChanges(makeContext(), to: level)
+    }
+
+    func applyChanges(_ chosen: [SetupChange]) async {
         guard !chosen.isEmpty, !isApplying else { return }
         isApplying = true
         let context = makeContext()
@@ -58,6 +65,9 @@ final class SetupModel {
     }
 
     func undo(_ id: UUID) async {
+        guard !isApplying else { return }
+        isApplying = true
+        defer { isApplying = false }
         let context = makeContext()
         do {
             try await Task.detached { try SetupApplier(context: context).undo(id) }.value

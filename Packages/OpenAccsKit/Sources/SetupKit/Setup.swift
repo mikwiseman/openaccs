@@ -143,6 +143,10 @@ public struct SetupChange: Codable, Sendable, Hashable, Identifiable {
 
 /// A file operation. Each carries what the path held when it was planned; Apply does nothing if that changed.
 public enum FileOperation: Codable, Sendable, Hashable {
+    /// Edit one TOML key or MCP table, checking that value and keeping unrelated edits from other areas.
+    case toml(path: String, table: [String], key: String, value: TOMLValue?, expected: TOMLValue?)
+    /// One user-scope Claude MCP server, changed through Claude's CLI and checked before Apply and Undo.
+    case claudeMCP(name: String, value: String?, expected: String?)
     /// Create or replace a file atomically.
     case write(path: String, contents: Data, permissions: Int = 0o600, expected: FileState)
     /// Make `path` a symbolic link to `target`.

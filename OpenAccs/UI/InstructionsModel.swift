@@ -106,7 +106,10 @@ final class InstructionsModel {
         </rules>
         """
         let context = makeContext()
-        let result = await Task.detached { context.run(["claude", "-p", "--no-session-persistence", prompt]) }.value
+        let result = await Task.detached {
+            context.run(["claude", "-p", "--no-session-persistence", "--tools", "", "--strict-mcp-config",
+                         "--setting-sources", "", "--disable-slash-commands", prompt])
+        }.value
         guard let result, result.status == 0, !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             message = result == nil ? "Adopting needs Claude Code (~/.local/bin/claude)." : "Claude Code couldn't merge them. Nothing changed."
             return

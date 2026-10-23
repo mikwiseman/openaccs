@@ -44,8 +44,13 @@ public struct SetupApplier: Sendable {
         var result = ApplyResult()
         let backups = context.paths.backupsDir.appending(path: "\(Self.stamp(now)) setup", directoryHint: .isDirectory)
         var done = Set<String>()
-        // Changes that need others go after them.
-        for change in changes.filter({ $0.requires.isEmpty }) + changes.filter({ !$0.requires.isEmpty }) {
+        // Resolve dependencies even when they span several areas (Import off → cleanup → shared skills).
+        var pending = changes
+        while !pending.isEmpty {
+            let index = pending.firstIndex { change in
+                change.requires.allSatisfy { dependency in !pending.contains { $0.id == dependency } }
+            } ?? 0
+            let change = pending.remove(at: index)
             if let missing = change.requires.first(where: { !done.contains($0) }) {
                 let title = changes.first { $0.id == missing }?.title ?? missing
                 result.skipped.append((change, "needs “\(title)” too"))
@@ -64,14 +69,15 @@ public struct SetupApplier: Sendable {
                 for operation in change.operations {
                     undo.insert(contentsOf: try perform(operation, backups: backups), at: 0)
                 }
-                result.applied.append(HistoryEntry(id: UUID(), date: now, area: change.area, title: change.title, undo: undo))
+                let entry = HistoryEntry(id: UUID(), date: now, area: change.area, title: change.title, undo: undo)
+                try save(history().filter { now.timeIntervalSince($0.date) < Self.keepHistory } + [entry])
+                result.applied.append(entry)
                 done.insert(change.id)
             } catch {
                 for operation in undo { _ = try? perform(operation, backups: backups) }
                 result.skipped.append((change, error.localizedDescription))
             }
         }
-        if !result.applied.isEmpty { try? save(history().filter { now.timeIntervalSince($0.date) < Self.keepHistory } + result.applied) }
         return result
     }
 
@@ -93,6 +99,11 @@ public struct SetupApplier: Sendable {
         var seen = Set<String>()
         for operation in operations {
             switch operation {
+            case .claudeMCP(let name, _, let expected):
+                guard let config = MCPSetup.readClaude(context), config.servers[name].map({ MCPSetup.json($0) }) == expected else { return false }
+            case .toml(let path, let table, let key, _, let expected):
+                guard seen.insert("toml:\(path):\(table + [key])").inserted else { continue }
+                guard let file = readTOML(path), file.value(key, in: table) == expected else { return false }
             case .write(let path, _, _, let expected), .link(let path, _, let expected), .remove(let path, let expected),
                  .restore(let path, _, let expected):
                 guard seen.insert(path).inserted else { continue }
@@ -110,6 +121,29 @@ public struct SetupApplier: Sendable {
     /// Does it, returning the operations that undo it.
     func perform(_ operation: FileOperation, backups: URL) throws -> [FileOperation] {
         switch operation {
+        case .claudeMCP(let name, let value, let expected):
+            guard let config = MCPSetup.readClaude(context), config.servers[name].map({ MCPSetup.json($0) }) == expected else { throw SetupError.changedSince }
+            if expected != nil {
+                guard context.run(MCPSetup.removeCommand(name))?.status == 0 else { throw SetupError.commandFailed("claude mcp remove") }
+            }
+            if let value, context.run(["claude", "mcp", "add-json", "--scope", "user", name, value])?.status != 0 {
+                if let expected { _ = context.run(["claude", "mcp", "add-json", "--scope", "user", name, expected]) }
+                throw SetupError.commandFailed("claude mcp add-json")
+            }
+            guard let after = MCPSetup.readClaude(context), after.servers[name].map({ MCPSetup.json($0) }) == value else {
+                _ = context.run(MCPSetup.removeCommand(name))
+                if let expected { _ = context.run(["claude", "mcp", "add-json", "--scope", "user", name, expected]) }
+                throw SetupError.commandFailed("claude mcp verification")
+            }
+            return [.claudeMCP(name: name, value: expected, expected: value)]
+        case .toml(let path, let table, let key, let value, let expected):
+            guard var file = readTOML(path), file.value(key, in: table) == expected else { throw SetupError.changedSince }
+            let edited = table == ["mcp_servers"] ? file.setServer(key, value)
+                : value.map { file.set(key, $0, in: table) } ?? file.remove(key, in: table)
+            guard edited else { throw SetupError.changedSince }
+            let url = URL(filePath: path)
+            let mode = (try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? Int ?? 0o600
+            return try perform(.write(path: path, contents: Data(file.text.utf8), permissions: mode, expected: FileState.of(url)), backups: backups)
         case .write(let path, let contents, let permissions, let expected):
             let url = URL(filePath: path)
             let saved = try backUp(url, expected: expected, into: backups, keepOriginal: true)
@@ -163,6 +197,11 @@ public struct SetupApplier: Sendable {
 
     private func save(_ entries: [HistoryEntry]) throws {
         try AtomicFile.write(JSON.encoder.encode(entries), to: historyFile, permissions: 0o600)
+    }
+
+    private func readTOML(_ path: String) -> TOMLFile? {
+        if FileState.of(URL(filePath: path)) == .absent { return TOMLFile(text: "") }
+        return (try? String(contentsOfFile: path, encoding: .utf8)).flatMap(TOMLFile.init(text:))
     }
 
     static func name(_ app: SetupApp) -> String {

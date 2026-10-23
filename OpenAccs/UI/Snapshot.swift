@@ -31,7 +31,10 @@ enum Snapshot {
             while !live.isReady, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
         }
         let root: AnyView
-        if args.contains("--setup") {
+        if args.contains("--instructions") {
+            root = AnyView(InstructionsView(model: InstructionsModel(context: { SetupService.context() }))
+                .frame(width: 900, height: 620))
+        } else if args.contains("--setup") {
             let setup = args.contains("--demo") ? SetupModel(demo: SetupModel.demoReports)
                 : SetupModel(context: { SetupService.context() }, scan: OneSetup.scan)
             Task { await setup.refresh() }
@@ -68,6 +71,16 @@ enum Snapshot {
         host.cacheDisplay(in: host.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]) else { fail("PNG encoding failed") }
         do { try png.write(to: out) } catch { fail(error.localizedDescription) }
+        #if DEBUG
+        // Keep the rendered fixture available to background UI automation, without taking focus.
+        if args.contains("--interactive"), Paths.isOverridden {
+            NSApplication.shared.setActivationPolicy(.accessory)
+            window.styleMask = [.titled, .closable]
+            window.title = "OpenAccs Setup — test"
+            window.orderBack(nil)
+            NSApplication.shared.run()
+        }
+        #endif
         exit(0)
     }
 

@@ -35,6 +35,9 @@ enum SetupService {
     /// folder; waits up to three minutes (a merge by `claude -p` takes a while).
     static func run(_ argv: [String], claude: URL?, home: URL) -> (status: Int32, output: String)? {
         guard let name = argv.first else { return nil }
+        // A debug fixture must never invoke a CLI that writes the user's real home.
+        if home.standardizedFileURL != FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL,
+           name == "claude" || name == "codex" { return nil }
         let executable: URL? = switch name {
         case "claude": claude
         case "codex": URL(filePath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")

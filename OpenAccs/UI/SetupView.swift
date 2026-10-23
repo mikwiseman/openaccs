@@ -7,6 +7,7 @@ struct SetupView: View {
     let model: SetupModel
     @State private var reviewing: Set<String>?
     @State private var showsHistory = false
+    @State private var autonomyPlan: [SetupChange]?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -59,7 +60,19 @@ struct SetupView: View {
                 }
             }
             if let defaults = model.report(.defaults) {
-                Section("Defaults") { AreaRow(report: defaults) }
+                Section("Defaults") {
+                    AreaRow(report: defaults)
+                    LabeledContent("Set autonomy") {
+                        HStack(spacing: 8) {
+                            ForEach(DefaultsSetup.Autonomy.allCases, id: \.self) { level in
+                                Button(level.rawValue.capitalized + "…") {
+                                    autonomyPlan = model.autonomyChanges(to: level)
+                                }
+                                .disabled(model.isApplying)
+                            }
+                        }
+                    }
+                }
             }
             if let importSync = model.report(.importSync), !importSync.attention.isEmpty || !importSync.changes.isEmpty {
                 Section("ChatGPT Import") { AreaRow(report: importSync) }
@@ -89,6 +102,9 @@ struct SetupView: View {
             ReviewSheet(model: model, selected: reviewing ?? []) { reviewing = nil }
         }
         .sheet(isPresented: $showsHistory) { HistorySheet(model: model) { showsHistory = false } }
+        .sheet(isPresented: Binding(get: { autonomyPlan != nil }, set: { if !$0 { autonomyPlan = nil } })) {
+            ReviewSheet(model: model, selected: Set((autonomyPlan ?? []).map(\.id)), planned: autonomyPlan) { autonomyPlan = nil }
+        }
     }
 
     static func defaultSelection(_ model: SetupModel) -> Set<String> {
@@ -174,7 +190,10 @@ private struct Mark: View {
 struct ReviewSheet: View {
     let model: SetupModel
     @State var selected: Set<String>
+    var planned: [SetupChange]? = nil
     let close: () -> Void
+
+    private var changes: [SetupChange] { planned ?? model.changes }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -185,7 +204,7 @@ struct ReviewSheet: View {
             }
             List {
                 ForEach(SetupArea.allCases, id: \.self) { area in
-                    let changes = model.changes.filter { $0.area == area }
+                    let changes = self.changes.filter { $0.area == area }
                     if !changes.isEmpty {
                         Section(area.title) {
                             ForEach(changes) { change in ChangeRow(change: change, isOn: binding(change)) }
@@ -198,9 +217,9 @@ struct ReviewSheet: View {
                 Button("Cancel", action: close).keyboardShortcut(.cancelAction)
                 Spacer()
                 Button(selected.isEmpty ? "Apply" : "Apply \(selected.count)") {
-                    let ids = selected
+                    let chosen = changes.filter { selected.contains($0.id) }
                     close()
-                    Task { await model.apply(ids) }
+                    Task { await model.applyChanges(chosen) }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selected.isEmpty)
@@ -217,10 +236,12 @@ struct ReviewSheet: View {
             if on {
                 for entry in model.attention where entry.item.fixes.contains(change.id) { selected.subtract(entry.item.fixes) }
                 selected.insert(change.id)
-                selected.formUnion(change.requires)
+                selected = changes.includingRequirements(selected)
             } else {
                 selected.remove(change.id)
-                for other in model.changes where other.requires.contains(change.id) { selected.remove(other.id) }
+                while let other = changes.first(where: { selected.contains($0.id) && !$0.requires.allSatisfy(selected.contains) }) {
+                    selected.remove(other.id)
+                }
             }
         })
     }

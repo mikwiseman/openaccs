@@ -4,7 +4,7 @@ import OpenAccsCore
 /// Skills: each one lives once in ~/.agents/skills, which Codex reads itself. Claude reads only ~/.claude/skills
 /// (one level deep, following links), so it gets one link per skill. Codex also lists ~/.codex/skills.
 /// Left alone: ~/.claude/skills/synced (Claude's per-account skills), ~/.codex/skills/.system (Codex's own), dot
-/// entries, and links someone else made. The links OpenAccs makes are listed in setup-skills.json, so it can
+/// entries, and links someone else made. The links OpenAccs makes are listed in setup-skills/, so it can
 /// later tell them apart from those.
 public enum SkillsSetup {
     /// `excluding`: folders in ~/.agents/skills another change removes (copies ChatGPT Import made). They count as
@@ -16,17 +16,12 @@ public enum SkillsSetup {
         let claude = entries(in: claudeDir).filter { $0.key != reserved }
         var changes: [SetupChange] = []
 
-        // Every change that makes links rewrites the record. Each expects what the change before it leaves,
-        // so a whole plan applies in one go, and Undo puts the record back together with the links.
-        let record = context.paths.appSupport.appending(path: "setup-skills.json")
-        var managed = Set((try? Data(contentsOf: record)).flatMap { try? JSON.decoder.decode(ManagedLinks.self, from: $0) }?.managedLinks ?? [])
-        var recordState = FileState.of(record)
+        // Separate records let any chosen skill apply without depending on unchecked changes.
         func remember(_ links: [String]) -> FileOperation {
-            managed.formUnion(links)
-            let data = (try? JSON.encoder.encode(ManagedLinks(managedLinks: managed.sorted()))) ?? Data()
-            let write = FileOperation.write(path: record.path, contents: data, expected: recordState)
-            recordState = .file(sha256: Digest.sha256(data))
-            return write
+            let key = Digest.sha256(Data(links.sorted().joined(separator: "\n").utf8))
+            let record = context.paths.appSupport.appending(path: "setup-skills/\(key).json")
+            let data = (try? JSON.encoder.encode(ManagedLinks(managedLinks: links.sorted()))) ?? Data()
+            return .write(path: record.path, contents: data, expected: FileState.of(record))
         }
 
         // Valid skills in ~/.agents/skills that Claude has no entry for: one link each, all in one change.
@@ -45,7 +40,8 @@ public enum SkillsSetup {
         // A real folder in ~/.claude/skills that Codex doesn't see moves to ~/.agents/skills and is linked back.
         let toShare = claude.filter { name, entry in
             !entry.isLink && entry.problem == nil
-                && FileState.of(agentsDir.appending(path: name)) == .absent && FileState.of(codexDir.appending(path: name)) == .absent
+                && (excluding.contains(agentsDir.appending(path: name).path) || FileState.of(agentsDir.appending(path: name)) == .absent)
+                && FileState.of(codexDir.appending(path: name)) == .absent
         }.keys.sorted()
         for name in toShare {
             let from = claudeDir.appending(path: name).path, to = agentsDir.appending(path: name).path
@@ -59,14 +55,15 @@ public enum SkillsSetup {
         // A copy that something still reads through a link stays.
         let everything = [agents, claude, codex].flatMap(\.values)
         let duplicates = codex.filter { name, copy in
-            guard !copy.isLink, let skill = copy.skill, agents[name]?.skill == skill, let real = copy.real else { return false }
+            guard !copy.isLink, let skill = copy.skill, let shared = agents[name], shared.skill == skill, let real = copy.real,
+                  sameContents(URL(filePath: copy.path), URL(filePath: shared.path)) else { return false }
             return !everything.contains { $0.path != copy.path && ($0.real == real || $0.real?.hasPrefix(real + "/") == true) }
         }.keys.sorted()
         if !duplicates.isEmpty {
             changes.append(SetupChange(
                 id: "skills.duplicates", area: .skills,
                 title: duplicates.count == 1 ? "Remove 1 duplicate copy Codex lists twice" : "Remove \(duplicates.count) duplicate copies Codex lists twice",
-                detail: "Same SKILL.md as in ~/.agents/skills; these folders in ~/.codex/skills go to Backups: \(duplicates.joined(separator: ", "))",
+                detail: "Identical files, links and permissions to ~/.agents/skills; these folders in ~/.codex/skills go to Backups: \(duplicates.joined(separator: ", "))",
                 operations: duplicates.map { .remove(path: codexDir.appending(path: $0).path, expected: .folder) }))
         }
 
@@ -118,6 +115,25 @@ public enum SkillsSetup {
 
     /// Claude keeps the claude.ai skills of each account in ~/.claude/skills/synced; nothing else goes there.
     static let reserved = "synced"
+
+    /// A matching SKILL.md alone says nothing about the scripts and references the skill runs.
+    static func sameContents(_ a: URL, _ b: URL) -> Bool {
+        let fm = FileManager.default
+        let left = FileState.of(a), right = FileState.of(b)
+        guard left == right else { return false }
+        switch left {
+        case .folder:
+            guard let names = try? fm.contentsOfDirectory(atPath: a.path),
+                  let other = try? fm.contentsOfDirectory(atPath: b.path), Set(names) == Set(other) else { return false }
+            return names.allSatisfy { sameContents(a.appending(path: $0), b.appending(path: $0)) }
+        case .file:
+            guard fm.isReadableFile(atPath: a.path), fm.isReadableFile(atPath: b.path) else { return false }
+            return (try? fm.attributesOfItem(atPath: a.path))?[.posixPermissions] as? Int
+                == (try? fm.attributesOfItem(atPath: b.path))?[.posixPermissions] as? Int
+        case .link: return true
+        case .absent: return false
+        }
+    }
 
     /// One entry in a skills folder, read through links.
     struct Entry {
@@ -198,7 +214,7 @@ public enum SkillsSetup {
         return fields
     }
 
-    /// setup-skills.json: the links in ~/.claude/skills that OpenAccs made, the only ones it may remove.
+    /// setup-skills/*.json: the links in ~/.claude/skills that OpenAccs made, the only ones it may remove.
     struct ManagedLinks: Codable {
         var managedLinks: [String]
     }

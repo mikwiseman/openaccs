@@ -70,8 +70,10 @@ url = "https://mcp.linear.app/mcp"
         let change = try #require(report.changes.first)
         #expect(report.changes.count == 1)
         #expect(change.title == "Turn off ChatGPT's Keep imports in sync" && change.waitsFor == .chatGPT)
-        guard case .write(let path, _, _, let expected) = change.operations.first, change.operations.count == 1 else { Issue.record("not one write"); return }
-        #expect(path == home.path(".codex/config.toml") && expected == .file(contents: Data(config.utf8)))
+        guard case .toml(let path, let table, let key, let value, let expected) = change.operations.first,
+              change.operations.count == 1 else { Issue.record("not one TOML edit"); return }
+        #expect(path == home.path(".codex/config.toml") && table == ["desktop"] && key == ImportSyncSetup.syncKey)
+        #expect(expected == .bool(true) && value == .bool(false))
 
         #expect(SetupApplier(context: home.context()).apply(report.changes).applied.count == 1)
         #expect(home.read(".codex/config.toml") == config.replacingOccurrences(of: "enabled = true #", with: "enabled = false #"))

@@ -14,11 +14,11 @@ out=build/release
 rm -rf "$out" && mkdir -p "$out"
 
 xcodegen generate >/dev/null
-xcodebuild -project OpenAccs.xcodeproj -scheme OpenAccs -configuration Release -derivedDataPath "$out/dd" \
+xcodebuild -project OpenAccs.xcodeproj -scheme OpenAccs -configuration Release -derivedDataPath "$out/dd" -jobs 2 \
   -destination 'generic/platform=macOS' \
   DEVELOPMENT_TEAM="$team" CODE_SIGN_IDENTITY="Developer ID Application" OTHER_CODE_SIGN_FLAGS=--timestamp \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-  build | grep -E "error:|BUILD" || true
+  build | grep -E "error:|BUILD"
 app="$out/dd/Build/Products/Release/OpenAccs.app"
 [[ -d $app ]] || { echo "build failed"; exit 1 }
 # Sparkle's helpers come signed by their authors: sign them with ours, inside out, then the app again.

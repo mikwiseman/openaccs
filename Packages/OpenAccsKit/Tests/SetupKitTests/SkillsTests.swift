@@ -41,9 +41,14 @@ private extension SetupHome {
     }
 
     var managedLinks: [String]? {
-        (try? Data(contentsOf: URL(filePath: path("Library/Application Support/OpenAccs/setup-skills.json"))))
-            .flatMap { try? JSONDecoder().decode(SkillsSetup.ManagedLinks.self, from: $0) }?.managedLinks
+        let legacy = URL(filePath: path("Library/Application Support/OpenAccs/setup-skills.json"))
+        let directory = URL(filePath: path("Library/Application Support/OpenAccs/setup-skills"))
+        let files = [legacy] + ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
+        let links = files.compactMap { try? Data(contentsOf: $0) }
+            .compactMap { try? JSONDecoder().decode(SkillsSetup.ManagedLinks.self, from: $0) }.flatMap(\.managedLinks)
+        return links.isEmpty ? nil : Set(links).sorted()
     }
+
 }
 
 @Suite struct SkillsTests {
@@ -83,7 +88,7 @@ private extension SetupHome {
             .link(path: home.path(".claude/skills/beta"), target: home.path(".agents/skills/beta"), expected: .absent),
         ])
         guard case .write(let path, let contents, _, let expected) = change.operations.last else { Issue.record("no record"); return }
-        #expect(path == home.path("Library/Application Support/OpenAccs/setup-skills.json") && expected == .absent)
+        #expect(path.hasPrefix(home.path("Library/Application Support/OpenAccs/setup-skills/")) && expected == .absent)
         #expect(try JSONDecoder().decode(SkillsSetup.ManagedLinks.self, from: contents).managedLinks == [home.path(".claude/skills/alpha"), home.path(".claude/skills/beta")])
         #expect(report.items == [
             SetupItem(id: "alpha", name: "alpha", claude: .missing, codex: .same),
