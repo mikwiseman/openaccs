@@ -7,9 +7,12 @@ import OpenAccsCore
 /// entries, and links someone else made. The links OpenAccs makes are listed in setup-skills.json, so it can
 /// later tell them apart from those.
 public enum SkillsSetup {
-    public static func scan(_ context: SetupContext) -> AreaReport {
+    /// `excluding`: folders in ~/.agents/skills another change removes (copies ChatGPT Import made). They count as
+    /// gone, so Claude gets no link to them and no copy in ~/.codex/skills goes because of them.
+    public static func scan(_ context: SetupContext, excluding: Set<String> = []) -> AreaReport {
         let agentsDir = context.url(".agents/skills"), claudeDir = context.url(".claude/skills"), codexDir = context.url(".codex/skills")
-        let agents = entries(in: agentsDir), codex = entries(in: codexDir)
+        let agents = entries(in: agentsDir).filter { !excluding.contains(agentsDir.appending(path: $0.key).path) }
+        let codex = entries(in: codexDir)
         let claude = entries(in: claudeDir).filter { $0.key != reserved }
         var changes: [SetupChange] = []
 
