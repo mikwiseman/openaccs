@@ -80,6 +80,14 @@ OpenAccs keeps its own data in `~/Library/Application Support/OpenAccs/`. The fi
 
 ### Download
 
+In Terminal, one command:
+
+```sh
+curl -fsSL https://mikwiseman.github.io/openaccs/install.sh | sh
+```
+
+It takes the newest release, checks that Apple notarized it and that it is signed by OpenAccs's developer, moves it to Applications and opens it. Or by hand:
+
 1. Download `OpenAccs-<version>.zip` from [GitHub Releases](https://github.com/mikwiseman/openaccs/releases/latest).
 2. Unzip it and move `OpenAccs.app` to your Applications folder.
 3. Open OpenAccs. Its icon appears in the menu bar, and it has no Dock icon.
