@@ -24,6 +24,8 @@ public enum InstructionsSetup {
             let old = (target.hasPrefix("/") ? URL(filePath: target) : codexMD.deletingLastPathComponent().appending(path: target)).standardizedFileURL
             if case .file = FileState.of(old), let real = realPath(old), real != realPath(claudeMD), real != realPath(homeCopy) { oldCopy = old }
         }
+        // Other tools that read the old copy through links of their own (Gemini CLI, opencode…) keep it.
+        let readers = oldCopy.map { links(to: $0, in: context.home).filter { $0.path != codexMD.path } } ?? []
 
         var attention: [Attention] = [], changes: [SetupChange] = []
         // What CLAUDE.md holds once the plan is applied; the diffs compare against it.
@@ -66,7 +68,7 @@ public enum InstructionsSetup {
         }
 
         // Once Codex links to CLAUDE.md, an old copy nothing else links to can go too; a change of its own so it can stay.
-        if let planned, let oldCopy, let real = realPath(oldCopy), real != realPath(override) {
+        if let planned, let oldCopy, readers.isEmpty, let real = realPath(oldCopy), real != realPath(override) {
             changes.append(SetupChange(id: "instructions.remove-old-copy", area: .instructions, title: "Remove the old copy \(name(oldCopy))",
                                        detail: detail(text(oldCopy) ?? "", planned),
                                        operations: [.remove(path: oldCopy.path, expected: FileState.of(oldCopy))],
@@ -101,8 +103,9 @@ public enum InstructionsSetup {
         }
         if let oldCopy {
             let oldText = text(oldCopy)
+            let kept = readers.isEmpty ? "" : "Kept: \(readers.map(name).formatted(.list(type: .and).locale(Locale(identifier: "en")))) link\(readers.count == 1 ? "s" : "") to it · "
             items.append(SetupItem(id: "instructions.old-copy", name: name(oldCopy), claude: .notShared,
-                                   codex: reads(oldText, !usesOverride && hasText(oldText)), note: note(oldCopy, oldText, home: context.home)))
+                                   codex: reads(oldText, !usesOverride && hasText(oldText)), note: kept + note(oldCopy, oldText, home: context.home)))
         }
 
         let summary: String
@@ -116,6 +119,16 @@ public enum InstructionsSetup {
             summary = "Claude and Codex read different instructions"
         }
         return AreaReport(area: .instructions, summary: summary, attention: attention, changes: changes, items: items)
+    }
+
+    /// Saving an edit of CLAUDE.md, planned against the text it was opened with. Through a link (into a dotfiles
+    /// repo, say), the file it ends at is written and the link stays.
+    public static func edit(_ context: SetupContext, from saved: String, to text: String) -> SetupChange {
+        let claudeMD = context.url(".claude/CLAUDE.md")
+        let file = realPath(claudeMD).map { URL(filePath: $0) } ?? claudeMD
+        let expected = saved.isEmpty && FileState.of(file) == .absent ? FileState.absent : .file(contents: Data(saved.utf8))
+        return SetupChange(id: "instructions.edit", area: .instructions, title: "Edited your instructions",
+                           operations: [.write(path: file.path, contents: Data(text.utf8), permissions: 0o644, expected: expected)])
     }
 
     /// A short line diff from `old` to `new`: lines only in `old` start with "- ", lines only in `new` with "+ ",
@@ -204,6 +217,26 @@ public enum InstructionsSetup {
         guard let resolved = realpath(url.path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
+    }
+
+    /// Links to `file` where agent tools keep their instructions: in ~, in each ~/.<folder> and ~/.config/<folder>,
+    /// and in Windsurf's rules folder. No deeper, and only the links themselves are read, so a scan stays quick and
+    /// opens nothing they point at.
+    static func links(to file: URL, in home: URL) -> [URL] {
+        let fm = FileManager.default
+        let paths = Set([file.standardizedFileURL.path, realPath(file)].compactMap { $0 })
+        // By name, so the paths keep the home's spelling.
+        func entries(_ folder: URL) -> [URL] { ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).map { folder.appending(path: $0) } }
+        // Real folders only: a linked one may lead into a folder macOS asks the user about.
+        func isFolder(_ url: URL) -> Bool { (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+        let hidden = entries(home).filter { $0.lastPathComponent.hasPrefix(".") && isFolder($0) }
+        let config = hidden.filter { $0.lastPathComponent == ".config" }.flatMap(entries).filter(isFolder)
+        let folders = [home] + hidden + config + [home.appending(path: ".codeium/windsurf/memories")]
+        return folders.flatMap(entries).filter { entry in
+            guard let target = try? fm.destinationOfSymbolicLink(atPath: entry.path) else { return false }
+            let resolved = target.hasPrefix("/") ? URL(filePath: target) : entry.deletingLastPathComponent().appending(path: target)
+            return paths.contains(resolved.standardizedFileURL.path)
+        }.sorted { $0.path < $1.path }
     }
 
     static func tilde(_ path: String, home: URL) -> String {

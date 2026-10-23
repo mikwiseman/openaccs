@@ -10,7 +10,9 @@ enum SetupService {
     static func context(paths: Paths = .current, lastClaude: UUID? = nil) -> SetupContext {
         let accounts = (try? AccountStore(file: paths.accountsFile).load()) ?? []
         var claude = accounts.filter { $0.provider == .claude && $0.claude != nil && $0.claude?.legacyConfigDir == nil }
-        if let lastClaude, let i = claude.firstIndex(where: { $0.id == lastClaude }) { claude.insert(claude.remove(at: i), at: 0) }
+        if let lastClaude = lastClaude ?? savedLastClaude(), let i = claude.firstIndex(where: { $0.id == lastClaude }) {
+            claude.insert(claude.remove(at: i), at: 0)
+        }
         let profiles = ClaudeProfiles(paths: paths)
         let resolved = claude.compactMap(\.claude).map(profiles.resolve)
         let cli = ClaudeCodeCLI(paths: paths).executable()
@@ -22,17 +24,26 @@ enum SetupService {
                 case .chatGPT:
                     !NSRunningApplication.runningApplications(withBundleIdentifier: BundleIDs.codex).isEmpty
                 case .claude(let dir):
-                    // Unknown processes count as "maybe this one": a running app's file is never written.
+                    // Unknown processes, and a profile accounts.json no longer lists, count as "maybe this one":
+                    // a running app's file is never written.
                     resolved.first { $0.dataDir.standardizedFileURL.path == URL(filePath: dir).standardizedFileURL.path }
-                        .map(profiles.mayBeRunning) ?? false
+                        .map(profiles.mayBeRunning) ?? true
                 }
             },
             run: { argv in run(argv, claude: cli, home: paths.home) }
         )
     }
 
+    /// The Claude profile used last, as the app saves it. Read from the app's own domain, since `openaccs` run
+    /// through its link has another one; so the Settings window and the CLI order profiles the same way.
+    static func savedLastClaude() -> UUID? {
+        let domain = Paths.isOverridden ? "is.wai.openaccs.test" : "is.wai.openaccs"
+        let defaults = Bundle.main.bundleIdentifier == domain ? .standard : UserDefaults(suiteName: domain)
+        return defaults?.string(forKey: "lastClaude").flatMap(UUID.init)
+    }
+
     /// Runs a tool by name (`claude`, `codex`, `sqlite3`) or path, with no account variables and the home as its
-    /// folder; waits up to three minutes (a merge by `claude -p` takes a while).
+    /// folder; waits up to three minutes (a merge by `claude -p` takes a while), then stops it and gives status -1.
     static func run(_ argv: [String], claude: URL?, home: URL) -> (status: Int32, output: String)? {
         guard let name = argv.first else { return nil }
         // A debug fixture must never invoke a CLI that writes the user's real home.
@@ -65,7 +76,7 @@ enum SetupService {
         }
         if done.wait(timeout: deadline) == .timedOut {
             process.terminate()
-            return nil
+            return (-1, "")
         }
         process.waitUntilExit()
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))

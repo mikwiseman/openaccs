@@ -38,20 +38,24 @@ public enum ClaudeAppSetup {
         var changes: [SetupChange] = []
         var carried: [FileOperation] = []
         var differing: [String: Int] = [:]
+        // A change's id comes from the profile's name, made unique with its folder when two names are alike.
+        let baseID = { (profile: Profile) in "claudeApp.\(profile.name.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())" }
+        let alike = Set(Dictionary(grouping: profiles, by: baseID).filter { $0.value.count > 1 }.keys)
         for profile in profiles {
             let path = profile.ref.dataDir.path
             let mine = all.filter { keyPath($0, profile.ref) != nil }.map(Self.key)
             let differ = mine.filter { key in result[key].map { $0.value.digest != profile.values[key]?.digest } ?? false }
             let waits = !differ.isEmpty && context.isRunning(.claude(path))
-            // What it holds after this sync. One whose write waits for its app keeps what it holds now, so what the
-            // user changes there meanwhile still counts as a change, and what the app saves on quit doesn't.
-            let holds = waits ? profile.values.mapValues(\.digest) : agreement.filter { mine.contains($0.key) }
-            let record = Record(dataDir: path, date: now, agreed: agreement, seen: holds)
-            let recordFile = Self.recordFile(profile.ref.dataDir, context)
-            guard let recordData = try? JSON.encoder.encode(record) else { continue }
-            let writeRecord = FileOperation.write(path: recordFile.path, contents: recordData, expected: FileState.of(recordFile))
-            let recordIsNew = records[path].map { $0.agreed != record.agreed || $0.seen != record.seen } ?? true
-            if (differ.isEmpty || waits), recordIsNew { carried.append(writeRecord) }
+            // What it holds once its change applies: the agreed values. Written in that change, so it is right
+            // whenever the change applies, also after an app that ran at the scan closed before Apply.
+            let own = Record(dataDir: path, date: now, agreed: agreement, seen: agreement.filter { mine.contains($0.key) })
+            // One whose write waits for its app also keeps what it holds now, in a record of its own that another
+            // change carries: what the user changes there meanwhile still counts as a change, and what the app saves
+            // on quit doesn't. Its own record, from the same sync, wins once its change applies.
+            let kept = waits ? Record(dataDir: path, date: now, agreed: agreement, seen: profile.values.mapValues(\.digest)) : own
+            guard let writeOwn = recordWrite(own, context), let writeKept = recordWrite(kept, waiting: waits, context) else { continue }
+            let keptIsNew = records[path].map { $0.agreed != kept.agreed || $0.seen != kept.seen } ?? true
+            if (differ.isEmpty || waits), keptIsNew { carried.append(writeKept) }
             if differ.isEmpty { continue }
 
             var object = profile.object
@@ -63,11 +67,12 @@ public enum ClaudeAppSetup {
             guard let contents = serialize(object) else { continue }
             let sources = profiles.filter { source in differ.contains { result[$0]?.from == source.ref } }.map(\.name)
             differing[path] = differ.count
+            let id = baseID(profile)
             changes.append(SetupChange(
-                id: "claudeApp.\(profile.name.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())", area: .claudeApp,
+                id: alike.contains(id) ? "\(id)-\(Digest.sha256(Data(path.utf8)).prefix(6))" : id, area: .claudeApp,
                 title: "\(profile.name) gets \(count(differ.count, "setting")) from \(sources.formatted(.list(type: .and).locale(Locale(identifier: "en"))))",
                 detail: "Sets \(differ.joined(separator: ", ")). Everything else in its claude_desktop_config.json stays as it is.",
-                operations: [.write(path: profile.file.path, contents: contents, expected: profile.state)] + (waits ? [] : [writeRecord]),
+                operations: [.write(path: profile.file.path, contents: contents, expected: profile.state), writeOwn],
                 waitsFor: .claude(path)))
         }
         // Records of profiles that aren't written now (one file each, so only one change may carry them), in a change
@@ -163,7 +168,7 @@ public enum ClaudeAppSetup {
 
     /// One profile's part of the last sync (setting → digest): what all profiles agreed on and what this one held
     /// after it. One file per profile, written in the same change as its settings file, so the changes for
-    /// several profiles apply on their own.
+    /// several profiles apply on their own (plus one kept while its write waited for its app).
     struct Record: Codable {
         var dataDir: String
         var date: Date
@@ -173,17 +178,27 @@ public enum ClaudeAppSetup {
 
     static func configFile(_ dataDir: URL) -> URL { dataDir.appending(path: "claude_desktop_config.json") }
 
-    static func recordFile(_ dataDir: URL, _ context: SetupContext) -> URL {
-        context.paths.appSupport.appending(path: "setup-claude-app/\(Digest.sha256(Data(dataDir.path.utf8)).prefix(16)).json")
+    static func recordFile(_ dataDir: URL, waiting: Bool = false, _ context: SetupContext) -> URL {
+        context.paths.appSupport.appending(path: "setup-claude-app/\(Digest.sha256(Data(dataDir.path.utf8)).prefix(16))\(waiting ? ".waiting" : "").json")
     }
 
+    static func recordWrite(_ record: Record, waiting: Bool = false, _ context: SetupContext) -> FileOperation? {
+        let file = recordFile(URL(filePath: record.dataDir), waiting: waiting, context)
+        guard let data = try? JSON.encoder.encode(record) else { return nil }
+        return .write(path: file.path, contents: data, expected: FileState.of(file))
+    }
+
+    /// Each profile's newest record; of two from the same sync, its own (written with its settings) wins.
     static func records(_ context: SetupContext) -> [String: Record] {
         let dir = context.paths.appSupport.appending(path: "setup-claude-app", directoryHint: .isDirectory)
-        var records: [String: Record] = [:]
+        var records: [String: (record: Record, own: Int)] = [:]
         for file in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] where file.pathExtension == "json" {
-            if let data = try? Data(contentsOf: file), let record = try? JSON.decoder.decode(Record.self, from: data) { records[record.dataDir] = record }
+            guard let data = try? Data(contentsOf: file), let record = try? JSON.decoder.decode(Record.self, from: data) else { continue }
+            let own = file.lastPathComponent.hasSuffix(".waiting.json") ? 0 : 1
+            if let found = records[record.dataDir], (found.record.date, found.own) >= (record.date, own) { continue }
+            records[record.dataDir] = (record, own)
         }
-        return records
+        return records.mapValues(\.record)
     }
 
     /// nil when the profile has no settings file yet (Claude makes it at first launch) or it isn't a JSON object.

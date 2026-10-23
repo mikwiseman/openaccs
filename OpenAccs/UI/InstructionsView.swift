@@ -71,19 +71,21 @@ private struct YoursView: View {
             Divider()
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let message = model.message {
+                        Text(message).foregroundStyle(.red)
+                    }
                     Text("\(InstructionsModel.measure(model.draft)) · Claude and Codex read this")
                     let one = InstructionsModel.oneProductLines(model.draft)
                     if one > 0 {
                         Text("\(one) line\(one == 1 ? "" : "s") name only Claude or only Codex.")
                             .foregroundStyle(.orange)
-                    } else if let message = model.message {
-                        Text(message).foregroundStyle(.orange)
                     }
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 Spacer()
-                Button("Revert") { model.load() }.disabled(!model.isEdited)
+                // After a refused save it loads the file as it is now.
+                Button("Revert") { model.load() }.disabled(!model.isEdited && model.message == nil)
                 Button("Save") { model.save(model.draft) }
                     .keyboardShortcut("s")
                     .disabled(!model.isEdited)
@@ -139,12 +141,16 @@ private struct EntryView: View {
             }
             Divider()
             HStack {
-                switch entry.adopt {
-                case .read:
-                    Text("No license given: read only.").font(.system(size: 11)).foregroundStyle(.secondary)
-                case .use, .rules:
-                    Text("Adopt merges the rules into your file with your Claude Code, in your words.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                if let message = model.message {
+                    Text(message).font(.system(size: 11)).foregroundStyle(.red)
+                } else {
+                    switch entry.adopt {
+                    case .read:
+                        Text("No license given: read only.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    case .use, .rules:
+                        Text("Adopt merges the rules into your file with your Claude Code, in your words.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if model.merging { ProgressView().controlSize(.small) }
@@ -195,6 +201,9 @@ private struct ProposalView: View {
             }
             HStack {
                 Button("Cancel") { model.proposal = nil }.keyboardShortcut(.cancelAction)
+                if let message = model.message {
+                    Text(message).font(.system(size: 11)).foregroundStyle(.red)
+                }
                 Spacer()
                 Button("Save") { if let p = model.proposal { model.save(p) } }.keyboardShortcut(.defaultAction)
             }
