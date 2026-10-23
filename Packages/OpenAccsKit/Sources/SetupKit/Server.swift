@@ -91,6 +91,12 @@ public enum ServerSetup {
                 env[key] = nil
                 dropped.append("Claude setting env.\(key): points at this Mac")
             }
+            // A key written into the settings never travels; a ${VAR} reference does.
+            let secret = ["KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL"]
+            for (key, value) in env where secret.contains(where: key.uppercased().contains) && !"\(value)".hasPrefix("${") {
+                env[key] = nil
+                dropped.append("Claude setting env.\(key): a key; set it on the server yourself")
+            }
             kept["env"] = env.isEmpty ? nil : env
         }
         if var hooks = kept["hooks"] as? [String: Any] {

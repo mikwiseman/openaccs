@@ -13,7 +13,7 @@ import Testing
         try home.write(".claude/skills/synced/acct/SKILL.md", "per account")
         try home.write(".claude/agents/reviewer.md", "reviewer")
         let settings: [String: Any] = [
-            "env": ["PATH": "/opt/homebrew/bin:/usr/bin", "EDITOR": "vim"],
+            "env": ["PATH": "/opt/homebrew/bin:/usr/bin", "EDITOR": "vim", "GITHUB_TOKEN": "ghp_literal", "SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}"],
             "permissions": ["defaultMode": "auto", "deny": ["Read(~/.ssh/**)"]],
             "hooks": ["Stop": [["hooks": [["type": "command", "command": "/Users/me/.claude/hooks/spin.sh"]]]],
                       "PostToolUse": [["hooks": [["type": "command", "command": "echo done"]]]]],
@@ -43,7 +43,8 @@ import Testing
         #expect(home.read("stage/claude/agents/reviewer.md") == "reviewer")
         // Settings without what points at this Mac.
         let kept = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: stage.appending(path: "claude/settings.json"))) as? [String: Any])
-        #expect(kept["env"] as? [String: String] == ["EDITOR": "vim"])
+        #expect(kept["env"] as? [String: String] == ["EDITOR": "vim", "SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}"])
+        #expect(plan.stays.contains("Claude setting env.GITHUB_TOKEN: a key; set it on the server yourself"))
         #expect((kept["hooks"] as? [String: Any])?.keys.sorted() == ["PostToolUse"])
         #expect(kept["statusLine"] == nil)
         #expect((kept["extraKnownMarketplaces"] as? [String: Any])?.keys.sorted() == ["official"])
@@ -57,7 +58,7 @@ import Testing
         // Nothing secret travelled.
         let staged = try FileManager.default.subpathsOfDirectory(atPath: stage.path)
             .compactMap { try? String(contentsOfFile: stage.appending(path: $0).path, encoding: .utf8) }.joined()
-        #expect(!staged.contains("literal-key"))
+        #expect(!staged.contains("literal-key") && !staged.contains("ghp_literal"))
     }
 
     @Test func aLinkBackUpTheTreeDoesNotLoop() throws {
