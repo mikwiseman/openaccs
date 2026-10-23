@@ -64,7 +64,7 @@ public enum ClaudeAppSetup {
             let sources = profiles.filter { source in differ.contains { result[$0]?.from == source.ref } }.map(\.name)
             differing[path] = differ.count
             changes.append(SetupChange(
-                id: "claudeApp.\(path)", area: .claudeApp,
+                id: "claudeApp.\(profile.name.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())", area: .claudeApp,
                 title: "\(profile.name) gets \(count(differ.count, "setting")) from \(sources.formatted(.list(type: .and).locale(Locale(identifier: "en"))))",
                 detail: "Sets \(differ.joined(separator: ", ")). Everything else in its claude_desktop_config.json stays as it is.",
                 operations: [.write(path: profile.file.path, contents: contents, expected: profile.state)] + (waits ? [] : [writeRecord]),
@@ -103,7 +103,9 @@ public enum ClaudeAppSetup {
     public static func seed(_ dataDir: URL, from source: URL) throws {
         guard let raw = try? Data(contentsOf: configFile(source)), let object = JSON.object(raw) else { return }
         var seeded: [String: Any] = [:]
-        for place in shared {
+        // A new profile also starts with the source's pins: its chats get the same card names, and the app reads
+        // pins from here while its own storage is still empty. (Afterwards pin sync keeps them the same.)
+        for place in shared + [["preferences", "epitaxyPrefs", "starred-local-code-sessions"]] {
             if let value = Self.value(at: place, in: object) { seeded = Self.setting(place[...], to: value, in: seeded) }
         }
         guard !seeded.isEmpty, let data = serialize(seeded) else { return }
@@ -126,7 +128,7 @@ public enum ClaudeAppSetup {
             }
             let pick = changed.max { $0.modified < $1.modified }
                 ?? holders.first { $0.values[key]?.digest == agreed[key] }
-                ?? holders.first
+                ?? firstTime(holders)
             if let pick, let value = pick.values[key] { result[key] = (value, pick.ref) }
         }
         return result
@@ -138,6 +140,14 @@ public enum ClaudeAppSetup {
         var value: Any
         /// Of its canonical JSON, to compare values and to remember them without keeping any key they hold.
         var digest: String
+    }
+
+    /// Before any sync: the profile with the most of these settings set (the one someone set up; a new profile only
+    /// has the app's defaults), then the one used last.
+    static func firstTime(_ holders: [Profile]) -> Profile? {
+        holders.enumerated().max { a, b in
+            (a.element.values.count, -a.offset) < (b.element.values.count, -b.offset)
+        }?.element
     }
 
     struct Profile {

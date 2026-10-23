@@ -78,8 +78,47 @@ public enum ServerSetup {
             }
             if !going.isEmpty { plan.goes.append("MCP servers for Claude: \(going.joined(separator: ", "))") }
         }
+        // Codex: the model and autonomy keys and the MCP servers that work there; no app state, projects or Mac paths.
+        if let text = try? String(contentsOf: context.url(".codex/config.toml"), encoding: .utf8), let config = TOMLFile(text: text) {
+            var server: [String: TOMLValue] = [:]
+            for key in codexKeys { server[key] = config.value(key, in: []) }
+            var going: [String] = []
+            var servers: [String: TOMLValue] = [:]
+            for (name, spec) in config.mcpServers.sorted(by: { $0.key < $1.key }) {
+                if let why = whyNotPortable(name, codex: spec) {
+                    plan.stays.append("Codex MCP \(name): \(why)")
+                } else {
+                    servers[name] = spec
+                    going.append(name)
+                }
+            }
+            if !servers.isEmpty { server["mcp_servers"] = .table(servers) }
+            try fm.createDirectory(at: stage.appending(path: "codex"), withIntermediateDirectories: true)
+            try Data(TOMLFile.render(server).utf8).write(to: stage.appending(path: "codex/config.toml"))
+            plan.goes.append("Codex settings (\(server.count - (servers.isEmpty ? 0 : 1)) keys)" + (going.isEmpty ? "" : " and MCP servers: \(going.joined(separator: ", "))"))
+        }
         plan.stays.append("Logins: each tool signs in on the server itself")
         return plan
+    }
+
+    /// The Codex keys a server gets; the rest of config.toml is this Mac's app state.
+    static let codexKeys = ["model", "model_reasoning_effort", "plan_mode_reasoning_effort", "personality", "approval_policy",
+                            "sandbox_mode", "approvals_reviewer", "project_doc_fallback_filenames", "web_search"]
+
+    /// Why a Codex MCP server can't go as it is, or nil. Codex names its keys' variables (env_vars,
+    /// bearer_token_env_var, env_http_headers), so only literal env and http_headers values are keys.
+    static func whyNotPortable(_ name: String, codex spec: TOMLValue) -> String? {
+        let table = spec.table ?? [:]
+        if macOnly.contains(name) { return "works only on a Mac" }
+        if let command = table["command"]?.string, isMacPath(command) || command.contains(".app/") || command.hasPrefix("/") && !command.hasPrefix("/usr/") {
+            return "runs a program on this Mac"
+        }
+        if (table["args"]?.array ?? []).contains(where: { isMacPath($0.string ?? "") }) { return "uses files on this Mac" }
+        if let helper = table["http_headers_helper"], isMacPath("\(helper)") { return "its sign-in helper is on this Mac" }
+        if !(table["env"]?.table ?? [:]).isEmpty || !(table["http_headers"]?.table ?? [:]).isEmpty {
+            return "a key is written into its settings; add it on the server with your key"
+        }
+        return nil
     }
 
     /// Claude's settings without what points at this Mac: PATH, hooks and a status line run from Mac paths,

@@ -269,4 +269,18 @@ private extension SetupHome {
         for entry in applier.history().reversed() { try applier.undo(entry.id) }
         #expect(home.snapshot(watched) == before)
     }
+
+    @Test func foldersAnotherChangeRemovesCountAsGone() throws {
+        let home = try SetupHome()
+        try home.write(".agents/skills/kept/SKILL.md", "---\nname: kept\n---\n")
+        try home.write(".agents/skills/update-cursor-settings/SKILL.md", "---\nname: update-cursor-settings\n---\n")
+        try home.write(".agents/skills/apple-design/SKILL.md", "---\nname: apple-design\n---\n")
+        try home.write(".codex/skills/apple-design/SKILL.md", "---\nname: apple-design\n---\n")
+        let leaving: Set<String> = [home.path(".agents/skills/update-cursor-settings"), home.path(".agents/skills/apple-design")]
+
+        let report = SkillsSetup.scan(home.context(), excluding: leaving)
+
+        // Claude gets only the skill that stays, and Codex's own copy of apple-design is not removed as a duplicate.
+        #expect(report.changes.map(\.title) == ["Claude gets kept from ~/.agents/skills"])
+    }
 }

@@ -1,6 +1,26 @@
 import SwiftUI
 
-/// The Settings window: what OpenAccs does on its own.
+/// The Settings window: General, and Setup (what Claude and Codex share).
+struct SettingsWindow: View {
+    let model: any PanelModel
+    let updater: AppUpdater
+    let setup: SetupModel
+    @AppStorage("settingsTab") private var tab = "general"
+
+    var body: some View {
+        TabView(selection: $tab) {
+            SettingsView(model: model, updater: updater)
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag("general")
+            SetupView(model: setup)
+                .frame(width: 580, height: 640)
+                .tabItem { Label("Setup", systemImage: "square.stack.3d.up") }
+                .tag("setup")
+        }
+    }
+}
+
+/// What OpenAccs does on its own.
 struct SettingsView: View {
     let model: any PanelModel
     let updater: AppUpdater

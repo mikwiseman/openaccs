@@ -34,6 +34,8 @@ targets:
         product: CodexKit
       - package: OpenAccsKit
         product: LimitsKit
+      - package: OpenAccsKit
+        product: SetupKit
       - package: Sparkle
     info:
       path: OpenAccs/Info.plist

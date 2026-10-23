@@ -6,6 +6,7 @@ struct PanelView: View {
     let model: any PanelModel
     @State private var adding: Provider?
     @Environment(\.openSettings) private var openSettings
+    @AppStorage("settingsTab") private var settingsTab = "general"
     @State private var listHeight: CGFloat = 0
     /// Which ends of the scrolling list have more beyond them, to fade those edges.
     @State private var overflow: Edge.Set = []
@@ -146,12 +147,9 @@ struct PanelView: View {
             Menu {
                 Button("Refresh") { model.refresh() }
                     .keyboardShortcut("r")
-                Button("Settings…") {
-                    // A menu-bar app isn't frontmost: bring it forward, or the window opens behind others.
-                    NSApp.activate()
-                    openSettings()
-                }
-                .keyboardShortcut(",")
+                Button("Setup…") { showSettings("setup") }
+                Button("Settings…") { showSettings("general") }
+                    .keyboardShortcut(",")
                 Button("Check for Updates…") { AppUpdater.shared.checkForUpdates() }
                 Divider()
                 Button("Quit OpenAccs") { model.quit() }
@@ -167,6 +165,13 @@ struct PanelView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// A menu-bar app isn't frontmost: bring it forward, or the window opens behind others.
+    private func showSettings(_ tab: String) {
+        settingsTab = tab
+        NSApp.activate()
+        openSettings()
     }
 
     enum Section: CaseIterable {

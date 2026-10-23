@@ -61,6 +61,52 @@ import Testing
         #expect(!staged.contains("literal-key") && !staged.contains("ghp_literal"))
     }
 
+    @Test func codexGetsItsModelAutonomyAndPortableServersOnly() throws {
+        let home = try SetupHome()
+        try home.write(".codex/config.toml", """
+        model = "gpt-6-astra"
+        approval_policy = "never"
+        sandbox_mode = "danger-full-access"
+        notify = ["/Applications/ChatGPT.app/Contents/MacOS/notify"]
+
+        [desktop]
+        external-agent-import-sync-enabled = true
+
+        [projects."/Users/me/x"]
+        trust_level = "trusted"
+
+        [mcp_servers.context7]
+        url = "https://mcp.context7.com/mcp"
+
+        [mcp_servers.wai-telegram]
+        url = "https://example.com/mcp"
+        bearer_token_env_var = "TELEGRAM_AI_KEY"
+
+        [mcp_servers.node_repl]
+        command = "/Applications/ChatGPT.app/Contents/Resources/node_repl"
+
+        [mcp_servers.secret]
+        url = "https://example.com/mcp"
+        http_headers = { X-API-KEY = "literal-key" }
+
+        [mcp_servers.playwright]
+        command = "npx"
+        args = ["@playwright/mcp@0.0.79"]
+        """)
+        let plan = try ServerSetup.stage(home.context(), into: URL(filePath: home.path("stage")))
+        let text = try #require(home.read("stage/codex/config.toml"))
+        let config = try #require(TOMLFile(text: text))
+        #expect(config.value("model", in: [])?.string == "gpt-6-astra")
+        #expect(config.value("sandbox_mode", in: [])?.string == "danger-full-access")
+        #expect(config.value("notify", in: []) == nil)
+        #expect(config.value("external-agent-import-sync-enabled", in: ["desktop"]) == nil)
+        #expect(Set(config.mcpServers.keys) == ["context7", "wai-telegram", "playwright"])
+        #expect(config.mcpServers["wai-telegram"]?.table?["bearer_token_env_var"]?.string == "TELEGRAM_AI_KEY")
+        #expect(!text.contains("literal-key") && !text.contains("/Users/"))
+        #expect(plan.stays.contains("Codex MCP node_repl: works only on a Mac"))
+        #expect(plan.stays.contains { $0.hasPrefix("Codex MCP secret: a key is written") })
+    }
+
     @Test func aLinkBackUpTheTreeDoesNotLoop() throws {
         let home = try SetupHome()
         try home.write(".agents/skills/loop/SKILL.md", "x")
