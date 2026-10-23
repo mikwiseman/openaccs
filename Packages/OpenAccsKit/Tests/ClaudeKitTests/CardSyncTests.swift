@@ -548,20 +548,25 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         try home.transcript(s)
         try sync(home, [a, b])   // both agree: not archived, acceptEdits, high
 
-        // In B: archived, switched to Auto and Max (the app rewrites its card).
-        try home.card(b, s.card(at: 2_000, ["isArchived": true, "permissionMode": "auto", "autoChosenInApp": true, "effort": "max"]))
+        // In B: archived, switched to Auto, Max and Ultracode (the app rewrites its card).
+        try home.card(b, s.card(at: 2_000, ["isArchived": true, "permissionMode": "auto", "autoChosenInApp": true, "effort": "max",
+                                            "sessionSettings": ["ultracode": true, "futureChoice": "b"]]))
         try sync(home, [a, b])
         let inA = home.json(at: home.cardFile(a, s))
         #expect(inA["isArchived"] as? Bool == true)
+        #expect((inA["sessionSettings"] as? [String: Any])?["ultracode"] as? Bool == true)
+        #expect((inA["sessionSettings"] as? [String: Any])?["futureChoice"] == nil)   // only what OpenAccs knows
         #expect(inA["permissionMode"] as? String == "auto")
         #expect(inA["autoChosenInApp"] as? Bool == true)
         #expect(inA["effort"] as? String == "max")
 
-        // Then unarchived in A: B follows, and nothing else moves back.
-        try home.card(a, inA.merging(["isArchived": false]) { _, new in new })
+        // Then unarchived and Ultracode off in A: B follows, and nothing else moves back.
+        try home.card(a, inA.merging(["isArchived": false, "sessionSettings": ["ultracode": false]]) { _, new in new })
         try sync(home, [a, b])
         let inB = home.json(at: home.cardFile(b, s))
         #expect(inB["isArchived"] as? Bool == false)
+        #expect((inB["sessionSettings"] as? [String: Any])?["ultracode"] as? Bool == false)
+        #expect((inB["sessionSettings"] as? [String: Any])?["futureChoice"] as? String == "b")   // B's own stays
         #expect(inB["permissionMode"] as? String == "auto")
         #expect(inB["effort"] as? String == "max")
         #expect(try sync(home, [a, b]).0.isEmpty)

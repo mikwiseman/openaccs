@@ -108,6 +108,7 @@ public struct CardSync: Sendable {
             case freshest
         }
 
+        /// A card field, or `parent.field` for one inside an object (`sessionSettings.ultracode`).
         var key: String
         /// true/false (missing = false); otherwise a string (missing = no opinion).
         var isFlag: Bool
@@ -115,8 +116,27 @@ public struct CardSync: Sendable {
         /// Fields that go with this one, copied from the card that holds the agreed value.
         var companions: [String] = []
 
+        private var path: (parent: String?, field: String) {
+            let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+            return parts.count == 2 ? (parts[0], parts[1]) : (nil, key)
+        }
+
         func value(in object: [String: Any]) -> String? {
-            isFlag ? ((object[key] as? Bool) ?? false ? "true" : "false") : object[key] as? String
+            let (parent, field) = path
+            let raw = parent.map { (object[$0] as? [String: Any])?[field] } ?? object[field]
+            return isFlag ? ((raw as? Bool) ?? false ? "true" : "false") : raw as? String
+        }
+
+        /// Sets it, keeping everything else in its parent object.
+        func set(_ value: String, in object: inout [String: Any]) {
+            let (parent, field) = path
+            guard let parent else {
+                object[field] = typed(value)
+                return
+            }
+            var inner = object[parent] as? [String: Any] ?? [:]
+            inner[field] = typed(value)
+            object[parent] = inner
         }
 
         func typed(_ value: String) -> Any {
@@ -129,6 +149,7 @@ public struct CardSync: Sendable {
         Setting(key: "permissionMode", isFlag: false, firstTime: .freshest, companions: ["autoChosenInApp", "bypassChosenInApp"]),
         Setting(key: "effort", isFlag: false, firstTime: .freshest),
         Setting(key: "model", isFlag: false, firstTime: .freshest),
+        Setting(key: "sessionSettings.ultracode", isFlag: true, firstTime: .freshest),
     ]
     static let refreshedFields = ["title", "titleSource", "lastActivityAt"]
     /// Titles someone chose: a rename in the app ("user") or through Claude's rename tool ("tool").
@@ -403,7 +424,7 @@ public struct CardSync: Sendable {
     static func apply(_ wanted: [String: String], companions: [String: Any]?, to object: inout [String: Any]) {
         for setting in settings {
             guard let target = wanted[setting.key] else { continue }
-            if setting.value(in: object) != target { object[setting.key] = setting.typed(target) }
+            if setting.value(in: object) != target { setting.set(target, in: &object) }
             if let companions, !setting.companions.isEmpty, setting.value(in: companions) == target {
                 for key in setting.companions { object[key] = companions[key] }
             }
@@ -490,7 +511,7 @@ struct Agreement {
 /// into cards (`remoteMcpServersConfig` alone can be 600 KB), which stays on disk until a card is edited.
 struct Card {
     /// The fields a sync copies, and the ones that go with a permission mode.
-    static let fields = Set(CardSync.copiedFields + CardSync.settings.flatMap(\.companions))
+    static let fields = Set(CardSync.copiedFields + CardSync.settings.flatMap { [String($0.key.prefix { $0 != "." })] + $0.companions })
 
     var file: URL
     /// The file as it was read: an edit reads the whole file again only while it is still this one.
