@@ -29,7 +29,7 @@ Every profile that OpenAccs opens uses the same `~/.claude` folder. Claude Code 
 
 The Code tab in the Claude app lists only the sessions of the account that is signed in. OpenAccs adds each session to the Code tab of your other profiles, so you can start a task on one account and continue it on another when the first account reaches its limit.
 
-- Pins, archived sessions, the permission mode, the effort and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
+- Pins (in their order), archived sessions, the permission mode, the effort and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
 - Every account you have signed in to in a window gets the same list, so signing in to another account inside one window shows the same sessions too.
 - A profile that is closed shows everything the next time it opens.
 - A profile that is open reads its session list only when it starts. When you switch to it from OpenAccs and nothing is running in it, OpenAccs restarts it so it shows the latest list. While a session is working there, OpenAccs only brings it forward and shows what's waiting, like "3 new sessions, 2 changed", with a Restart link.

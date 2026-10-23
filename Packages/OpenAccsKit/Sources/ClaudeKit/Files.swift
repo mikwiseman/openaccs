@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenAccsCore
 
 /// File checks that never follow symlinks (lstat), for folders Claude reads and writes.
 enum FS {
@@ -104,6 +105,15 @@ struct Backups {
     func copy(_ file: URL) throws -> URL {
         let destination = try slot(for: file)
         try FileManager.default.copyItem(at: file, to: destination)
+        return destination
+    }
+
+    /// Saves `data` where a copy of `file` would go: the part of a file worth keeping when the rest must
+    /// not be copied.
+    @discardableResult
+    func save(_ data: Data, for file: URL) throws -> URL {
+        let destination = try slot(for: file)
+        try AtomicFile.write(data, to: destination)
         return destination
     }
 

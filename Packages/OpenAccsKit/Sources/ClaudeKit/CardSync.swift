@@ -10,6 +10,8 @@ public struct SyncOperation: Sendable, Hashable {
         case update
         /// An OpenAccs-made copy of a deleted session moves to Backups (stopped profiles only).
         case remove
+        /// A stopped profile's sidebar gets the agreed pins (`file` is its config; no `cliSessionId`).
+        case pins
     }
 
     public var kind: Kind
@@ -27,6 +29,8 @@ public struct SyncOperation: Sendable, Hashable {
     var settles: [String: String]?
     /// Keep a copy of the old card first; not needed when only its activity time moves on.
     var backup = true
+    /// The chats the sidebar pins once written (pins).
+    var pins: [String]?
 }
 
 public struct SyncPlan: Sendable, Hashable {
@@ -66,6 +70,8 @@ public struct SyncReport: Sendable, Hashable {
 struct SyncRecords: Sendable, Hashable {
     var settings: [String: [String: String]]
     var seen: [String: [String: [String: String]]]
+    var pins: [String]?
+    var pinsSeen: [String: [String]] = [:]
 }
 
 /// Keeps every profile's Code-tab session list complete over the shared `~/.claude` transcripts, in
@@ -95,8 +101,6 @@ public struct CardSync: Sendable {
     /// A chat setting that is the same in every window: the last change anywhere wins.
     struct Setting: Sendable {
         enum FirstTime: Sendable {
-            /// On if any window has it on (pins: nothing pinned disappears).
-            case any
             /// On only if every window has it on (archive: nothing shown disappears).
             case all
             /// From the copy used last.
@@ -120,7 +124,6 @@ public struct CardSync: Sendable {
     }
 
     static let settings = [
-        Setting(key: "isStarred", isFlag: true, firstTime: .any),
         Setting(key: "isArchived", isFlag: true, firstTime: .all),
         Setting(key: "permissionMode", isFlag: false, firstTime: .freshest, companions: ["autoChosenInApp", "bypassChosenInApp"]),
         Setting(key: "effort", isFlag: false, firstTime: .freshest),
@@ -188,8 +191,12 @@ public struct CardSync: Sendable {
             }
             if behind > 0 { waiting[dir] = behind }
         }
+        let pins = pinPlan(profiles: profiles, running: runningPaths, scan: scan, creating: operations)
+        operations += pins.operations
+        waiting.merge(pins.waiting, uniquingKeysWith: +)
         // Added to what was remembered (a chat missing from one scan keeps its history); deleted chats go.
-        var records = SyncRecords(settings: scan.state.settings, seen: scan.state.seen)
+        var records = SyncRecords(settings: scan.state.settings, seen: scan.state.seen, pins: pins.agreed ?? scan.state.pins,
+                                  pinsSeen: scan.state.pinsSeen.merging(pins.seen) { _, new in new })
         records.settings.merge(agreement.settings) { _, new in new }
         for (dir, chats) in agreement.seen { records.seen[dir, default: [:]].merge(chats) { _, new in new } }
         for id in scan.deleted {
@@ -197,6 +204,7 @@ public struct CardSync: Sendable {
             for dir in records.seen.keys { records.seen[dir]?[id] = nil }
         }
         let isNew = records.settings != scan.state.settings || records.seen != scan.state.seen
+            || records.pins != scan.state.pins || records.pinsSeen != scan.state.pinsSeen
         return SyncPlan(operations: operations, tombstones: scan.noticedDeletions.sorted(), records: isNew ? records : nil, waiting: waiting)
     }
 
@@ -207,6 +215,8 @@ public struct CardSync: Sendable {
         if let records = plan.records {
             state.settings = records.settings
             state.seen = records.seen
+            state.pins = records.pins
+            state.pinsSeen = records.pinsSeen
         }
         let backups = Backups(base: paths.backupsDir, label: "card-sync")
         var report = SyncReport()
@@ -243,6 +253,17 @@ public struct CardSync: Sendable {
                         state.created.removeAll { $0.file == op.file.path }
                         report.removed += 1
                     }
+                case .pins:
+                    let stopped = claude.runningByPath().map { $0[op.dataDir.standardizedFileURL.path] == nil } ?? false
+                    guard stopped, FS.isRegularFile(op.file), let contents = op.contents, let expected = op.expected,
+                          (try? Data(contentsOf: op.file)) == expected else {
+                        report.skipped += 1
+                        continue
+                    }
+                    if let old = PinList(dataDir: op.dataDir)?.backup() { try backups.save(old, for: op.file) }
+                    try AtomicFile.write(contents, to: op.file)
+                    state.pinsSeen[op.dataDir.standardizedFileURL.path] = op.pins
+                    report.updated += 1
                 }
                 if let settles = op.settles { state.seen[folder.standardizedFileURL.path, default: [:]][op.cliSessionId] = settles }
             } catch {
@@ -271,6 +292,68 @@ public struct CardSync: Sendable {
             let mine = folder.cards.filter { $0.claims.contains(id) }
             return mine.allSatisfy { card in createdAt[card.file.path].map { $0 > launch } ?? false }
         }.count
+    }
+
+    /// Every sidebar brought to the agreed pins: a stopped profile's config gets them (nothing else in it
+    /// changes); an open one counts them as waiting until it restarts. A chat is pinned there by the card the
+    /// app shows (in its current folder, including one this sync creates), or by the card it pins it by already.
+    func pinPlan(profiles: [ClaudeProfile], running: Set<String>, scan: Scan, creating: [SyncOperation])
+        -> (operations: [SyncOperation], agreed: [String]?, seen: [String: [String]], waiting: [String: Int]) {
+        struct Window {
+            var profile: ClaudeProfile
+            var key: String
+            var list: PinList
+            /// cliSessionId → the sessionId to pin it by; sessionIds not found in any card of the profile.
+            var card: [String: String]
+            var unknown: [String]
+            /// The chats it pins now.
+            var now: [String]
+        }
+        var windows: [Window] = []
+        for profile in profiles {
+            let key = profile.dataDir.standardizedFileURL.path
+            guard !windows.contains(where: { $0.key == key }), let list = PinList(dataDir: profile.dataDir) else { continue }
+            let current = profile.cardsDir?.standardizedFileURL.path
+            var chat: [String: String] = [:], card: [String: String] = [:]
+            for folder in scan.folders where folder.profile.dataDir.standardizedFileURL.path == key {
+                for c in folder.cards {
+                    guard let id = c.cliSessionId else { continue }
+                    if folder.dir.path == current { card[id] = card[id] ?? c.sessionId; chat[c.sessionId] = id }
+                    else if chat[c.sessionId] == nil { chat[c.sessionId] = id }
+                }
+            }
+            for op in creating where op.kind == .create && op.file.deletingLastPathComponent().standardizedFileURL.path == current {
+                let id = op.file.deletingPathExtension().lastPathComponent
+                card[op.cliSessionId] = card[op.cliSessionId] ?? id
+                chat[id] = op.cliSessionId
+            }
+            var now: [String] = []
+            for id in list.ids {
+                guard let c = chat[id], !now.contains(c) else { continue }
+                now.append(c)
+                if card[c] == nil { card[c] = id }
+            }
+            windows.append(Window(profile: profile, key: key, list: list, card: card, unknown: list.ids.filter { chat[$0] == nil }, now: now))
+        }
+        guard !windows.isEmpty else { return ([], nil, [:], [:]) }
+        let agreed = PinAgreement.merge(scan.state.pins, holders: windows.map {
+            PinAgreement.Holder(now: $0.now, seen: scan.state.pinsSeen[$0.key], modified: $0.list.modified)
+        }, deleted: scan.deleted)
+        var operations: [SyncOperation] = [], seen: [String: [String]] = [:], waiting: [String: Int] = [:]
+        for window in windows {
+            seen[window.key] = window.now
+            let shown = agreed.filter { window.card[$0] != nil }
+            if running.contains(window.key) {
+                let differ = Set(window.now).symmetricDifference(shown).count
+                if differ > 0, let dir = window.profile.cardsDir?.standardizedFileURL.path { waiting[dir, default: 0] += differ }
+                continue
+            }
+            let ids = shown.compactMap { window.card[$0] } + window.unknown
+            guard ids != window.list.ids, let data = window.list.with(ids) else { continue }
+            operations.append(SyncOperation(kind: .pins, dataDir: window.profile.dataDir, file: window.list.file, cliSessionId: "",
+                                            contents: data, expected: window.list.raw, pins: shown))
+        }
+        return (operations, agreed, seen, waiting)
     }
 
     // MARK: Cards
@@ -372,7 +455,6 @@ struct Agreement {
                     let shown = values.filter { current.contains($0.holder.dir) }
                     let pool = shown.isEmpty ? values : shown
                     switch setting.firstTime {
-                    case .any: agreed[setting.key] = pool.contains { $0.value == "true" } ? "true" : "false"
                     case .all: agreed[setting.key] = pool.allSatisfy { $0.value == "true" } ? "true" : "false"
                     case .freshest:
                         // A value from an old folder still beats none (no mode opens a chat in Manual). Among
@@ -619,6 +701,10 @@ struct SyncState: Codable, Equatable {
     var settings: [String: [String: String]] = [:]
     /// What each card folder held then (or got from OpenAccs): folder path → chat → setting → value.
     var seen: [String: [String: [String: String]]] = [:]
+    /// The chats every sidebar pins, in order, agreed at the last sync (nil before the first one).
+    var pins: [String]?
+    /// What each profile's sidebar pinned then (or got from OpenAccs): data folder path → chats.
+    var pinsSeen: [String: [String]] = [:]
 
     init() {}
 
@@ -628,6 +714,8 @@ struct SyncState: Codable, Equatable {
         tombstones = try c.decodeIfPresent([String].self, forKey: .tombstones) ?? []
         settings = try c.decodeIfPresent([String: [String: String]].self, forKey: .settings) ?? [:]
         seen = try c.decodeIfPresent([String: [String: [String: String]]].self, forKey: .seen) ?? [:]
+        pins = try c.decodeIfPresent([String].self, forKey: .pins)
+        pinsSeen = try c.decodeIfPresent([String: [String]].self, forKey: .pinsSeen) ?? [:]
     }
 
     static func load(_ url: URL) throws -> SyncState {
