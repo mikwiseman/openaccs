@@ -26,5 +26,19 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Mik Wiseman</string>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://mikwiseman.github.io/openaccs/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>vgOpSM+ASntxre/dvwwujiPIdnw5UCUjUgDyrHlmOsU=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUSendProfileInfo</key>
+	<false/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

@@ -2,8 +2,9 @@ import SwiftUI
 import AppKit
 import OpenAccsCore
 
-/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider>]` renders the panel (or an add
-/// view) at 2x to a PNG and exits, without a menu-bar item. For checking the UI without clicking.
+/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --settings]` renders the panel (or an
+/// add view, or the Settings window) at 2x to a PNG and exits, without a menu-bar item. For checking the UI
+/// without clicking.
 ///
 /// Draws through an offscreen NSHostingView rather than ImageRenderer, because ImageRenderer
 /// can't draw AppKit-backed controls (text fields come out as placeholders).
@@ -28,8 +29,10 @@ enum Snapshot {
             let deadline = Date().addingTimeInterval(30)
             while !live.isReady, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
         }
-        let host = NSHostingView(rootView: PanelView(model: model, adding: adding)
-            .background(Color(nsColor: .windowBackgroundColor)))
+        let root: AnyView = args.contains("--settings")
+            ? AnyView(SettingsView(model: model, updater: AppUpdater.shared))
+            : AnyView(PanelView(model: model, adding: adding))
+        let host = NSHostingView(rootView: root.background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: 400),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: args.contains("--dark") ? .darkAqua : .aqua)

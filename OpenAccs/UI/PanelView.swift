@@ -5,6 +5,7 @@ import OpenAccsCore
 struct PanelView: View {
     let model: any PanelModel
     @State private var adding: Provider?
+    @Environment(\.openSettings) private var openSettings
     @State private var listHeight: CGFloat = 0
     /// Which ends of the scrolling list have more beyond them, to fade those edges.
     @State private var overflow: Edge.Set = []
@@ -145,7 +146,13 @@ struct PanelView: View {
             Menu {
                 Button("Refresh") { model.refresh() }
                     .keyboardShortcut("r")
-                Toggle("Launch at Login", isOn: Binding(get: { model.launchAtLogin }, set: { model.launchAtLogin = $0 }))
+                Button("Settings…") {
+                    // A menu-bar app isn't frontmost: bring it forward, or the window opens behind others.
+                    NSApp.activate()
+                    openSettings()
+                }
+                .keyboardShortcut(",")
+                Button("Check for Updates…") { AppUpdater.shared.checkForUpdates() }
                 Divider()
                 Button("Quit OpenAccs") { model.quit() }
                     .keyboardShortcut("q")

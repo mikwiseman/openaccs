@@ -7,6 +7,10 @@ options:
 packages:
   OpenAccsKit:
     path: Packages/OpenAccsKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    # Sparkle 2.10.0, pinned to the published immutable commit.
+    revision: eef1a539a373c1f1a320624b1130fc5de7b2e100
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -31,6 +35,7 @@ targets:
         product: CodexKit
       - package: OpenAccsKit
         product: LimitsKit
+      - package: Sparkle
     info:
       path: OpenAccs/Info.plist
       properties:
@@ -41,6 +46,15 @@ targets:
         LSApplicationCategoryType: public.app-category.developer-tools
         LSUIElement: true
         NSHumanReadableCopyright: "© 2026 Mik Wiseman"
+        # Sparkle: a signed feed on GitHub Pages (docs/appcast.xml). The private key is in 1Password,
+        # Development / "OpenAccs Sparkle EdDSA private key"; scripts/release.sh signs with it.
+        SUFeedURL: https://mikwiseman.github.io/openaccs/appcast.xml
+        SUPublicEDKey: vgOpSM+ASntxre/dvwwujiPIdnw5UCUjUgDyrHlmOsU=
+        SUEnableAutomaticChecks: true
+        SUAllowsAutomaticUpdates: false
+        SUSendProfileInfo: false
+        SURequireSignedFeed: true
+        SUVerifyUpdateBeforeExtraction: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: is.wai.openaccs

@@ -24,6 +24,7 @@ struct OpenAccsApp: App {
     @MainActor static func makeModel() -> any PanelModel {
         let model = AppModel()
         ControlHandler.start(model: model)
+        _ = AppUpdater.shared   // starts the daily update check
         return model
     }
 
@@ -34,5 +35,8 @@ struct OpenAccsApp: App {
             MenuBarIcon(usage: model.menuBarUsage)
         }
         .menuBarExtraStyle(.window)
+        Settings {
+            SettingsView(model: model, updater: AppUpdater.shared)
+        }
     }
 }
