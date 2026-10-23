@@ -20,7 +20,6 @@ settings:
     CODE_SIGN_IDENTITY: "-"
     ENABLE_HARDENED_RUNTIME: YES
     MARKETING_VERSION: "0.3.3"
-    CURRENT_PROJECT_VERSION: "1"
 targets:
   OpenAccs:
     type: application
@@ -42,7 +41,8 @@ targets:
         CFBundleDisplayName: OpenAccs
         CFBundleName: OpenAccs
         CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Sparkle compares this: the version itself, so every release is newer than the last.
+        CFBundleVersion: $(MARKETING_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
         LSUIElement: true
         NSHumanReadableCopyright: "© 2026 Mik Wiseman"
