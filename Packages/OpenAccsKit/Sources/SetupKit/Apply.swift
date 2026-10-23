@@ -43,7 +43,14 @@ public struct SetupApplier: Sendable {
     public func apply(_ changes: [SetupChange], now: Date = Date()) -> ApplyResult {
         var result = ApplyResult()
         let backups = context.paths.backupsDir.appending(path: "\(Self.stamp(now)) setup", directoryHint: .isDirectory)
-        for change in changes {
+        var done = Set<String>()
+        // Changes that need others go after them.
+        for change in changes.filter({ $0.requires.isEmpty }) + changes.filter({ !$0.requires.isEmpty }) {
+            if let missing = change.requires.first(where: { !done.contains($0) }) {
+                let title = changes.first { $0.id == missing }?.title ?? missing
+                result.skipped.append((change, "needs “\(title)” too"))
+                continue
+            }
             if let app = change.waitsFor, context.isRunning(app) {
                 result.skipped.append((change, "waits for \(Self.name(app)) to close"))
                 continue
@@ -58,6 +65,7 @@ public struct SetupApplier: Sendable {
                     undo.insert(contentsOf: try perform(operation, backups: backups), at: 0)
                 }
                 result.applied.append(HistoryEntry(id: UUID(), date: now, area: change.area, title: change.title, undo: undo))
+                done.insert(change.id)
             } catch {
                 for operation in undo { _ = try? perform(operation, backups: backups) }
                 result.skipped.append((change, error.localizedDescription))
@@ -118,7 +126,7 @@ public struct SetupApplier: Sendable {
         case .remove(let path, let expected):
             guard let saved = try backUp(URL(filePath: path), expected: expected, into: backups, keepOriginal: false) else { return [] }
             return [.restore(path: path, backup: saved, expected: .absent)]
-        case .move(let path, let destination, let expected):
+        case .move(let path, let destination, _):
             let to = URL(filePath: destination)
             try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.moveItem(atPath: path, toPath: destination)

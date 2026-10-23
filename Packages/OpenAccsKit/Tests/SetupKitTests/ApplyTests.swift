@@ -124,6 +124,29 @@ final class Calls: @unchecked Sendable {
         #expect(!FileManager.default.fileExists(atPath: to))
     }
 
+    @Test func aChangeThatNeedsAnotherAppliesOnlyAfterIt() throws {
+        let home = try SetupHome()
+        let old = try home.write(".agents.md", "# Old\n")
+        let link = home.path(".codex/AGENTS.md")
+        try FileManager.default.createDirectory(atPath: home.path(".codex"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: old)
+        let claude = try home.write(".claude/CLAUDE.md", "# Mine\n")
+        let relink = SetupChange(id: "link", area: .instructions, title: "Codex reads your CLAUDE.md",
+                                 operations: [.link(path: link, target: claude, expected: FileState.of(URL(filePath: link)))])
+        let removeOld = SetupChange(id: "old", area: .instructions, title: "Remove the old copy",
+                                    operations: [.remove(path: old, expected: FileState.of(URL(filePath: old)))], requires: ["link"])
+        let applier = SetupApplier(context: home.context())
+
+        // Alone, it would leave Codex's link broken: skipped.
+        let alone = applier.apply([removeOld])
+        #expect(alone.applied.isEmpty && alone.skipped.first?.reason == "needs “link” too")
+        #expect(home.read(".agents.md") == "# Old\n")
+        // Listed first, it still goes after what it needs.
+        let both = applier.apply([removeOld, relink])
+        #expect(both.applied.map(\.title) == ["Codex reads your CLAUDE.md", "Remove the old copy"])
+        #expect(home.linkTarget(".codex/AGENTS.md") == claude)
+    }
+
     @Test func undoIsRefusedWhenSomethingChangedSince() throws {
         let home = try SetupHome()
         let file = try home.write("CLAUDE.md", "one")

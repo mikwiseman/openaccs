@@ -126,14 +126,18 @@ public struct SetupChange: Codable, Sendable, Hashable, Identifiable {
     public var operations: [FileOperation]
     /// Apply skips it while this app runs (and says so).
     public var waitsFor: SetupApp?
+    /// Changes (by id) that must apply in the same run first, or this one would leave things broken.
+    public var requires: [String]
 
-    public init(id: String, area: SetupArea, title: String, detail: String? = nil, operations: [FileOperation], waitsFor: SetupApp? = nil) {
+    public init(id: String, area: SetupArea, title: String, detail: String? = nil, operations: [FileOperation],
+                waitsFor: SetupApp? = nil, requires: [String] = []) {
         self.id = id
         self.area = area
         self.title = title
         self.detail = detail
         self.operations = operations
         self.waitsFor = waitsFor
+        self.requires = requires
     }
 }
 
@@ -169,4 +173,9 @@ public enum FileState: Codable, Sendable, Hashable {
         default: return .file(sha256: Digest.sha256((try? Data(contentsOf: url)) ?? Data()))
         }
     }
+}
+
+public extension FileState {
+    /// A file holding exactly these bytes.
+    static func file(contents: Data) -> FileState { .file(sha256: Digest.sha256(contents)) }
 }

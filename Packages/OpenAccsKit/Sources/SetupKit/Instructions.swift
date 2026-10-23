@@ -28,9 +28,12 @@ public enum InstructionsSetup {
         var attention: [Attention] = [], changes: [SetupChange] = []
         // What CLAUDE.md holds once the plan is applied; the diffs compare against it.
         var planned: String?
+        // The change that points Codex at CLAUDE.md; removing what Codex reads now needs it first.
+        var linkID: String?
         if let claudeText, !sameFile {
             let id = "instructions.link-codex"
             planned = claudeText
+            linkID = id
             changes.append(SetupChange(id: id, area: .instructions, title: "Codex reads your CLAUDE.md", detail: detail(codexText ?? "", claudeText),
                                        operations: [.link(path: codexMD.path, target: claudeMD.path, expected: FileState.of(codexMD))]))
             if !usesOverride {
@@ -45,6 +48,7 @@ public enum InstructionsSetup {
         } else if claudeText == nil, let codexData, let codexText, hasText(codexText) {
             let id = "instructions.from-codex"
             planned = codexText
+            linkID = id
             attention.append(Attention(id: "instructions.claude-none", text: "Claude has no CLAUDE.md", fixes: [id]))
             changes.append(SetupChange(id: id, area: .instructions, title: "Make Codex's instructions your CLAUDE.md",
                                        detail: "\(name(claudeMD)) gets the \(lineCount(codexText)) in \(name(codexMD)), word for word, and \(name(codexMD)) becomes a link to it.",
@@ -55,15 +59,18 @@ public enum InstructionsSetup {
         if let claudeText, let homeText {
             let id = "instructions.remove-home-copy"
             attention.append(Attention(id: "instructions.home-copy", text: "Claude reads ~/AGENTS.md too, a second copy", fixes: [id]))
+            let codexReadsIt = codexReal != nil && codexReal == realPath(homeCopy)
             changes.append(SetupChange(id: id, area: .instructions, title: "Remove the second copy ~/AGENTS.md", detail: detail(homeText, claudeText),
-                                       operations: [.remove(path: homeCopy.path, expected: FileState.of(homeCopy))]))
+                                       operations: [.remove(path: homeCopy.path, expected: FileState.of(homeCopy))],
+                                       requires: codexReadsIt ? linkID.map { [$0] } ?? [] : []))
         }
 
         // Once Codex links to CLAUDE.md, an old copy nothing else links to can go too; a change of its own so it can stay.
         if let planned, let oldCopy, let real = realPath(oldCopy), real != realPath(override) {
             changes.append(SetupChange(id: "instructions.remove-old-copy", area: .instructions, title: "Remove the old copy \(name(oldCopy))",
                                        detail: detail(text(oldCopy) ?? "", planned),
-                                       operations: [.remove(path: oldCopy.path, expected: FileState.of(oldCopy))]))
+                                       operations: [.remove(path: oldCopy.path, expected: FileState.of(oldCopy))],
+                                       requires: linkID.map { [$0] } ?? []))
         }
 
         if usesOverride {
