@@ -1,10 +1,11 @@
 import SwiftUI
 import AppKit
 import OpenAccsCore
+import SetupKit
 
-/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --settings]` renders the panel (or an
-/// add view, or the Settings window) at 2x to a PNG and exits, without a menu-bar item. For checking the UI
-/// without clicking.
+/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --settings | --setup]` renders the panel
+/// (or an add view, the Settings window or its Setup tab) at 2x to a PNG and exits, without a menu-bar item.
+/// For checking the UI without clicking. A live `--setup` scans this Mac (read only) first.
 ///
 /// Draws through an offscreen NSHostingView rather than ImageRenderer, because ImageRenderer
 /// can't draw AppKit-backed controls (text fields come out as placeholders).
@@ -29,9 +30,21 @@ enum Snapshot {
             let deadline = Date().addingTimeInterval(30)
             while !live.isReady, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
         }
-        let root: AnyView = args.contains("--settings")
-            ? AnyView(SettingsView(model: model, updater: AppUpdater.shared))
-            : AnyView(PanelView(model: model, adding: adding))
+        let root: AnyView
+        if args.contains("--setup") {
+            let setup = args.contains("--demo") ? SetupModel(demo: SetupModel.demoReports)
+                : SetupModel(context: { SetupService.context() }, scan: OneSetup.scan)
+            Task { await setup.refresh() }
+            let deadline = Date().addingTimeInterval(60)
+            repeat { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) } while (setup.isScanning || setup.reports.isEmpty) && Date() < deadline
+            root = args.contains("--review")
+                ? AnyView(ReviewSheet(model: setup, selected: Set(setup.reports.recommendedChanges.map(\.id))) {})
+                : AnyView(SetupView(model: setup).frame(width: 580, height: 700))
+        } else if args.contains("--settings") {
+            root = AnyView(SettingsView(model: model, updater: AppUpdater.shared))
+        } else {
+            root = AnyView(PanelView(model: model, adding: adding))
+        }
         let host = NSHostingView(rootView: root.background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: 400),
                               styleMask: .borderless, backing: .buffered, defer: false)

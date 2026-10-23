@@ -42,6 +42,22 @@ Codex lives in the ChatGPT desktop app. The app and every `codex` CLI read the s
 
 A running Codex keeps its account in memory, so OpenAccs quits the ChatGPT app before the swap and opens it again afterwards. Then it checks that Codex came back on the account you chose. Your local Codex history stays in place, because Codex doesn't split it by account. Cloud tasks, connectors and chats belong to each account and change with it.
 
+### One setup for Claude and Codex
+
+Settings → Setup shows what Claude and Codex share and what differs, from the files themselves, and fixes it with one click:
+
+- **Instructions.** One file, `~/.claude/CLAUDE.md`. Codex reads it through a link at `~/.codex/AGENTS.md`, so there is nothing to keep in sync.
+- **Skills.** Stored once in `~/.agents/skills`, which Codex reads; Claude gets a link per skill in `~/.claude/skills`.
+- **MCP servers.** The same servers in Claude Code and Codex, translated between their formats field by field. Keys stay as `${VAR}` references; a key written into a file is never copied.
+- **Claude app settings.** The same app settings in every Claude window, like pins.
+- **Defaults.** Recommended settings for both: autonomy, keeping chats, hiding `.env` and logins from agents.
+
+Nothing changes until you review the plan and apply it. Each change goes to History with Undo, and old files go to Backups first. Logins, connectors and account skills are never copied. If ChatGPT's own Import copies Claude into Codex, the Setup tab offers to turn it off and to remove what it copied.
+
+The Instructions window edits your file, shows instruction files that people publish (with their licenses), adopts the rules you pick into your file through your own Claude Code, and has a six-question wizard for a short file of your own.
+
+From the terminal: `openaccs setup`, `openaccs setup apply [--dry-run]`, `openaccs setup history` and `openaccs setup undo <n>`.
+
 ### See usage limits for Claude, Codex, Grok, Kimi and Z.ai
 
 Each account row shows how much is left of each limit and when it resets. A full bar means the limit is untouched, and it empties as you use it. A bar turns orange when 20% or less is left. An empty limit shows "Empty" in red and when it comes back. A small star (✦) marks the account with the most left for each product, or, when all of them are empty, the one that comes back first. The menu bar icon has two rings for what's left of the 5-hour and weekly limits of the Claude account you used last.
@@ -61,7 +77,7 @@ OpenAccs reads local files every minute and asks providers and CLIs every 5 to 1
 - **Claude.** OpenAccs never reads, stores or copies Claude credentials. To open an account, OpenAccs starts the Claude app with `--user-data-dir` set to that profile's folder, and you sign in inside Claude. It never opens Claude's `config.json`, where Claude keeps its encrypted login. For exact limits, OpenAccs runs Anthropic's own unmodified `claude` CLI, which signs in through Anthropic's browser page and keeps its own login. OpenAccs only reads the CLI's answer about usage.
 - **Codex.** OpenAccs keeps each saved Codex sign-in in the macOS Keychain, never in a plain file. The active sign-in stays in `~/.codex/auth.json`, where Codex keeps it anyway. OpenAccs renews the tokens of saved accounts that aren't active through OpenAI's own sign-in server, and it leaves the active sign-in to Codex.
 - **API keys.** OpenAccs keeps Kimi and Z.ai keys in the macOS Keychain. It checks each key with the provider before it saves it, so a mistyped key never becomes an account.
-- **Network.** OpenAccs has no analytics and no telemetry. Once a day it checks for updates at `mikwiseman.github.io` (a feed signed with the OpenAccs key; turn this off in Settings), and every update asks before it installs. Otherwise it talks only to `chatgpt.com` and `auth.openai.com` for Codex, `api.kimi.com` or `api.kimi.ai` for Kimi, and `api.z.ai` or `open.bigmodel.cn` for Z.ai. The Claude and Grok CLIs talk to their own servers themselves.
+- **Network.** OpenAccs has no analytics and no telemetry. Once a day it checks for updates at `mikwiseman.github.io` (a feed signed with the OpenAccs key; turn this off in Settings), and every update asks before it installs. While the Instructions window is open, it loads the gallery from `mikwiseman.github.io` and the files in it from `raw.githubusercontent.com`. Otherwise it talks only to `chatgpt.com` and `auth.openai.com` for Codex, `api.kimi.com` or `api.kimi.ai` for Kimi, and `api.z.ai` or `open.bigmodel.cn` for Z.ai. The Claude and Grok CLIs talk to their own servers themselves.
 - **Command line.** The `openaccs` command talks to the app over a socket in `~/Library/Application Support/OpenAccs/`, which only your user account can open. Keys you add from the terminal are read from stdin and never written to logs.
 - **Your files.** Every write is atomic, so a crash never leaves a half-written file. OpenAccs never edits a file that a running app is using. Before it replaces or removes anything, it copies the old version to `~/Library/Application Support/OpenAccs/Backups/`.
 - **Sign-outs.** OpenAccs never signs out of anything. Removing an account removes it from OpenAccs only, and the Claude profile and its history stay on disk. Signing out of Codex would revoke that sign-in everywhere, so OpenAccs never does it.

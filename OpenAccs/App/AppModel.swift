@@ -5,6 +5,7 @@ import ClaudeKit
 import CodexKit
 import LimitsKit
 import OpenAccsCore
+import SetupKit
 
 /// The real model: accounts on disk, live usage, Claude profiles and history sync, Codex switching.
 @MainActor @Observable
@@ -727,6 +728,9 @@ final class AppModel: PanelModel {
     func addClaude(label: String) async throws {
         let id = UUID()
         let dir = try claude.makeProfileDirectory(id: id)
+        // Before its first launch: the app settings, chat MCP servers and pins of the window used last.
+        let source = claudeAccounts.first { $0.id == lastClaude } ?? claudeAccounts.first
+        if let source = source.flatMap(profile) { try? ClaudeAppSetup.seed(dir, from: source.dataDir) }
         let account = Account(id: id, provider: .claude, label: label.isEmpty ? "Claude" : label, color: nextColor(),
                               claude: ClaudeAccountInfo(dataDir: dir.path))
         accounts.insert(account, at: (accounts.lastIndex { $0.provider == .claude }).map { $0 + 1 } ?? 0)

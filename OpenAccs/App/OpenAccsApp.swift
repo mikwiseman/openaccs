@@ -1,5 +1,6 @@
 import SwiftUI
 import OpenAccsCore
+import SetupKit
 
 @main
 @MainActor
@@ -15,6 +16,7 @@ enum Main {
 
 struct OpenAccsApp: App {
     @State private var model: any PanelModel
+    @State private var setup = SetupModel(context: { SetupService.context() }, scan: OneSetup.scan)
 
     init() {
         Snapshot.runIfRequested(live: { AppModel(readOnly: true) })
@@ -36,7 +38,11 @@ struct OpenAccsApp: App {
         }
         .menuBarExtraStyle(.window)
         Settings {
-            SettingsView(model: model, updater: AppUpdater.shared)
+            SettingsWindow(model: model, updater: AppUpdater.shared, setup: setup)
         }
+        Window("Instructions", id: "instructions") {
+            InstructionsView(model: InstructionsModel(context: { SetupService.context() }))
+        }
+        .defaultSize(width: 900, height: 620)
     }
 }

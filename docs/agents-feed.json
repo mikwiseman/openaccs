@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "note": "Instruction files people actually publish, for the OpenAccs Instructions window. Fetched from raw.githubusercontent.com while the window is open. 'use' = the whole file can replace yours; 'rules' = tick rules to merge into yours; 'read' = no license given, read only.",
+  "entries": [
+    {
+      "id": "karpathy-guidelines",
+      "author": "Forrest Chang, from Andrej Karpathy's notes",
+      "title": "Karpathy-inspired guidelines",
+      "kind": "personal",
+      "raw": "https://raw.githubusercontent.com/forrestchang/andrej-karpathy-skills/main/CLAUDE.md",
+      "source": "https://github.com/forrestchang/andrej-karpathy-skills",
+      "license": "MIT",
+      "adopt": "use",
+      "note": "Four principles: think before coding, simplicity first, surgical changes, goal-driven execution."
+    },
+    {
+      "id": "obra",
+      "author": "Jesse Vincent",
+      "title": "Global CLAUDE.md",
+      "kind": "personal",
+      "raw": "https://raw.githubusercontent.com/obra/dotfiles/main/.claude/CLAUDE.md",
+      "source": "https://github.com/obra/dotfiles",
+      "license": "MIT",
+      "adopt": "rules",
+      "note": "Strict peer rules: never invent technical details, test-driven always, ask before any exception."
+    },
+    {
+      "id": "steipete",
+      "author": "Peter Steinberger",
+      "title": "Global AGENTS.md",
+      "kind": "personal",
+      "raw": "https://raw.githubusercontent.com/steipete/agent-scripts/main/AGENTS.MD",
+      "source": "https://github.com/steipete/agent-scripts",
+      "license": "MIT",
+      "adopt": "rules",
+      "note": "Dense and operational: delete old code paths, keep to your own scope, no attribution trailers."
+    },
+    {
+      "id": "harper",
+      "author": "Harper Reed",
+      "title": "Global CLAUDE.md",
+      "kind": "personal",
+      "raw": "https://raw.githubusercontent.com/harperreed/dotfiles/master/.claude/CLAUDE.md",
+      "source": "https://github.com/harperreed/dotfiles",
+      "license": null,
+      "adopt": "read",
+      "note": "Playful and long. Sizes the process to the diff: small changes skip the ceremony."
+    },
+    {
+      "id": "t3code",
+      "author": "Theo and the T3 Code team",
+      "title": "T3 Code AGENTS.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/pingdotgg/t3code/main/AGENTS.md",
+      "source": "https://github.com/pingdotgg/t3code",
+      "license": "MIT",
+      "adopt": "rules",
+      "note": "With a note from Theo: don't keep complexity just because it already exists."
+    },
+    {
+      "id": "pi",
+      "author": "Mario Zechner",
+      "title": "Pi AGENTS.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/badlogic/pi-mono/main/AGENTS.md",
+      "source": "https://github.com/badlogic/pi-mono",
+      "license": "MIT",
+      "adopt": "rules",
+      "note": "Short answers, read files in full, never commit unless asked, no backward compatibility unless asked."
+    },
+    {
+      "id": "ghostty",
+      "author": "Mitchell Hashimoto and Ghostty",
+      "title": "Ghostty AGENTS.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/ghostty-org/ghostty/main/AGENTS.md",
+      "source": "https://github.com/ghostty-org/ghostty",
+      "license": "MIT",
+      "adopt": "rules",
+      "note": "40 lines: commands, a map of the code, and no issues or pull requests opened by agents."
+    },
+    {
+      "id": "simonw-llm",
+      "author": "Simon Willison",
+      "title": "llm AGENTS.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/simonw/llm/main/AGENTS.md",
+      "source": "https://github.com/simonw/llm",
+      "license": "Apache-2.0",
+      "adopt": "rules",
+      "note": "25 practical lines: how to set up, test and lint. No persona at all."
+    },
+    {
+      "id": "mattpocock",
+      "author": "Matt Pocock",
+      "title": "skills CLAUDE.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/mattpocock/skills/main/CLAUDE.md",
+      "source": "https://github.com/mattpocock/skills",
+      "license": "MIT",
+      "adopt": "rules",
+      "note": "No em dashes anywhere, and a skill router that must stay accurate."
+    },
+    {
+      "id": "kentcdodds",
+      "author": "Kent C. Dodds",
+      "title": "kentcdodds.com AGENTS.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/kentcdodds/kentcdodds.com/main/AGENTS.md",
+      "source": "https://github.com/kentcdodds/kentcdodds.com",
+      "license": null,
+      "adopt": "read",
+      "note": "Tiny and stable: only pointers to docs, updated whenever an agent hits a sharp edge."
+    },
+    {
+      "id": "autoresearch",
+      "author": "Andrej Karpathy",
+      "title": "autoresearch program.md",
+      "kind": "project",
+      "raw": "https://raw.githubusercontent.com/karpathy/autoresearch/master/program.md",
+      "source": "https://github.com/karpathy/autoresearch",
+      "license": null,
+      "adopt": "read",
+      "note": "An agent program that loops and never stops to ask, with a simplicity rule for every change."
+    }
+  ]
+}

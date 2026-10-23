@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import OpenAccsCore
+import SetupKit
 
 /// `openaccs …`: a thin client of the running app. Every command goes through the app's control socket and the
 /// same AppModel actions as the panel, so behavior and safety are identical. Never creates the app's UI.
@@ -73,6 +74,8 @@ private struct Command {
         case "add": try add()
         case "rename": try rename()
         case "remove": try remove()
+        case "setup": try setup()
+        case "vps", "server": try vps()
         default: throw Failure.usage("Unknown command “\(name ?? "")”. Run openaccs help.")
         }
     }
@@ -81,6 +84,129 @@ private struct Command {
         if let flag = flags.subtracting(allowed).sorted().first {
             throw Failure.usage("\(name ?? "status") doesn't take \(flag). Run openaccs help.")
         }
+    }
+
+    // MARK: One setup
+
+    /// Scans and applies here, not in the app: scanning only reads, and every change checks its files first.
+    func setup() throws {
+        try allow(["--json", "--yes", "--dry-run"])
+        let context = SetupService.context(lastClaude: UserDefaults.standard.string(forKey: "lastClaude").flatMap(UUID.init))
+        let applier = SetupApplier(context: context)
+        switch args.first {
+        case nil:
+            let reports = OneSetup.scan(context)
+            if json { return try printJSON(reports.map(SetupSummary.init)) }
+            for report in reports { print("\(report.area.title.padding(toLength: 14, withPad: " ", startingAt: 0)) \(report.summary)") }
+            let attention = reports.attention
+            if !attention.isEmpty {
+                print("\nNeeds you")
+                for item in attention { print("  \(item.level == .broken ? "✕" : "●") \(item.text)") }
+            }
+            let changes = reports.changes
+            if !changes.isEmpty {
+                print("\nChanges (openaccs setup apply [<id>…] [--dry-run])")
+                for change in changes { print("  \(change.id)  \(change.title)") }
+            }
+        case "apply":
+            let reports = OneSetup.scan(context)
+            let ids = Set(args.dropFirst())
+            let named = reports.changes.filter { ids.contains($0.id) }
+            let needed = Set(named.flatMap(\.requires))
+            let chosen = ids.isEmpty ? reports.recommendedChanges : reports.changes.filter { ids.contains($0.id) || needed.contains($0.id) }
+            if let unknown = ids.subtracting(reports.changes.map(\.id)).sorted().first {
+                throw Failure.usage("No change “\(unknown)”. Run openaccs setup to list them.")
+            }
+            guard !chosen.isEmpty else { return print("Nothing to change.") }
+            for change in chosen { print("  \(change.title)\(change.waitsFor == nil ? "" : " (once that app is closed)")") }
+            if flags.contains("--dry-run") { return }
+            try confirm("Apply \(chosen.count) change\(chosen.count == 1 ? "" : "s")?")
+            let result = applier.apply(chosen)
+            for entry in result.applied { print("Done: \(entry.title)") }
+            for skipped in result.skipped { print("Not done: \(skipped.change.title), \(skipped.reason).") }
+            if !result.skipped.isEmpty { throw Failure(code: 1, message: "") }
+        case "history":
+            let entries = applier.history().reversed()
+            guard !entries.isEmpty else { return print("Nothing applied yet.") }
+            for (n, entry) in entries.enumerated() {
+                print("\(n + 1)  \(entry.date.formatted(date: .abbreviated, time: .shortened))  \(entry.title)\(entry.undoneAt == nil ? "" : "  (undone)")")
+            }
+        case "undo":
+            let entries = Array(applier.history().reversed())
+            guard args.count == 2, let n = Int(args[1]), entries.indices.contains(n - 1) else {
+                throw Failure.usage("Undo which? openaccs setup undo <number from openaccs setup history>")
+            }
+            try confirm("Undo “\(entries[n - 1].title)”?")
+            try applier.undo(entries[n - 1].id)
+            print("Undone: \(entries[n - 1].title)")
+        default:
+            throw Failure.usage("openaccs setup [apply [<id>…] [--dry-run] | history | undo <n>] [--json]")
+        }
+    }
+
+    /// `openaccs vps user@host`: this Mac's setup on a server, over the user's own ssh. Logins never travel: each
+    /// tool signs in on the server itself.
+    func vps() throws {
+        try allow(["--yes", "--dry-run"])
+        guard args.count == 1, let host = args.first, !host.hasPrefix("-") else {
+            throw Failure.usage("openaccs vps user@host [--dry-run] [--yes]")
+        }
+        guard flags.contains("--dry-run") || Self.shell(["/usr/bin/ssh", "-o", "ConnectTimeout=15", host, "test \"$(id -u)\" != 0"]) == 0 else {
+            throw Failure.error("Couldn't reach \(host) as a user other than root. Agents shouldn't run as root: create a user there (adduser) and use it.")
+        }
+        let paths = Paths.current
+        let stage = paths.appSupport.appending(path: "Servers/\(host.replacingOccurrences(of: "/", with: "_"))/stage", directoryHint: .isDirectory)
+        let plan = try ServerSetup.stage(SetupService.context(), into: stage)
+        print("Goes to \(host):")
+        for line in plan.goes { print("  \(line)") }
+        print("Stays on this Mac:")
+        for line in plan.stays { print("  \(line)") }
+        if flags.contains("--dry-run") { return print("\nStaged in \(stage.path). Nothing was sent.") }
+        try confirm("Set up \(host)?")
+        guard let script = Bundle.main.url(forResource: "server-setup", withExtension: "sh") else {
+            throw Failure.error("This OpenAccs has no server script. Reinstall it.")
+        }
+        let steps: [[String]] = [
+            ["/usr/bin/ssh", host, "mkdir -p ~/.openaccs"],
+            ["/usr/bin/rsync", "-a", "--delete", stage.path + "/", "\(host):.openaccs/incoming/"],
+            ["/usr/bin/rsync", "-a", script.path, "\(host):.openaccs/setup.sh"],
+            ["/usr/bin/ssh", "-t", host, "bash ~/.openaccs/setup.sh"],
+        ]
+        for step in steps where Self.shell(step) != 0 {
+            throw Failure.error("Stopped: \(step.prefix(2).joined(separator: " ")) failed. What was replaced on \(host) is in ~/.openaccs/backups.")
+        }
+        if isatty(STDIN_FILENO) != 0 {
+            print("\nEach tool signs in on \(host) itself (your logins on this Mac never travel).")
+            for (tool, command) in [("Claude Code", "~/.local/bin/claude auth login"), ("Codex", "PATH=$HOME/.local/bin:$PATH codex login --device-auth")] {
+                FileHandle.standardError.write(Data("Sign \(tool) in on \(host) now? [Y/n] ".utf8))
+                let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+                if answer.isEmpty || answer == "y" || answer == "yes" { _ = Self.shell(["/usr/bin/ssh", "-t", host, command]) }
+            }
+        } else {
+            print("\nSign in on \(host): ssh -t \(host) claude auth login, then codex login --device-auth")
+        }
+        print("\nOn \(host):")
+        _ = Self.shell(["/usr/bin/ssh", host, """
+            export PATH=$HOME/.local/bin:$PATH; \
+            printf '  Claude Code: '; claude auth status >/dev/null 2>&1 && echo signed in || echo not signed in; \
+            printf '  Codex: '; codex login status >/dev/null 2>&1 && echo signed in || echo not signed in; \
+            printf '  Codex reads: %s\\n' "$(readlink ~/.codex/AGENTS.md)"; \
+            printf '  Skills: %s\\n' "$(ls ~/.agents/skills 2>/dev/null | wc -l | tr -d ' ')"
+            """])
+    }
+
+    /// Runs a command with this terminal (so ssh can ask for a password or a host key); returns its exit status.
+    static func shell(_ argv: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(filePath: argv[0])
+        process.arguments = Array(argv.dropFirst())
+        do { try process.run() } catch { return -1 }
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    private func printJSON<T: Encodable>(_ value: T) throws {
+        print(String(decoding: try JSON.encoder.encode(value), as: UTF8.self))
     }
 
     // MARK: Reading
@@ -317,6 +443,11 @@ private struct Command {
                                               no key or "-" reads it from stdin, out of shell history
       openaccs rename <account> <new name>
       openaccs remove <account> [--yes]
+      openaccs setup [--json]                 what Claude and Codex share, what needs you, what would change
+      openaccs setup apply [<id>…] [--dry-run] [--yes]
+                                              apply the recommended (or the named) changes; undo from history
+      openaccs setup history | undo <n>
+      openaccs vps user@host [--dry-run]      this Mac's setup on a server (each tool signs in there itself)
       openaccs help | version
 
     <account>   a name or a unique part of it, provider:name, or the number status shows
