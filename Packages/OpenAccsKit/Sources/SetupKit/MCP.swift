@@ -27,10 +27,21 @@ public enum MCPSetup {
         let codexPlugins = (codex.value("plugins", in: [])?.table ?? [:]).filter { $0.value.table?["enabled"] != .bool(false) }.keys.sorted()
         let records = Self.records(context)
         let names = Set(claude.servers.keys).union(codexServers.keys).sorted()
+        // A side with no servers at all since a sync was most likely reset (a fresh config.toml or ~/.claude.json),
+        // not emptied on purpose. Following it would remove every server from the other side, so its records don't
+        // count: nothing is removed, and the other side's servers are offered back to it.
+        let emptied: Tool? = if codexServers.isEmpty, records.keys.contains(where: { claude.servers[$0] != nil }) { .codex }
+            else if claude.servers.isEmpty, records.keys.contains(where: { codexServers[$0] != nil }) { .claude }
+            else { nil }
         var plans: [String: Plan] = [:]
         for name in names {
+            // Claude refuses any other name, and one refused server would hold back every server added with it.
+            guard name.wholeMatch(of: /[A-Za-z0-9_-]+/) != nil else {
+                plans[name] = .unshared("Claude takes only letters, digits, - and _ in a server name")
+                continue
+            }
             plans[name] = plan(claude: claude.servers[name].map(translate(claude:)), codex: codexServers[name].map(translate(codex:)),
-                               record: records[name], projects: claude.projects[name] ?? 0,
+                               record: emptied == nil ? records[name] : nil, projects: claude.projects[name] ?? 0,
                                claudePlugin: plugin(name, in: claude.plugins), codexPlugin: plugin(name, in: codexPlugins))
         }
 
@@ -95,6 +106,10 @@ public enum MCPSetup {
                 detail: (tool == .codex ? "New tables in ~/.codex/config.toml, every other line kept: " : "Added with claude mcp add-json --scope user: ")
                     + done.joined(separator: ", "),
                 operations: operations, waitsFor: tool == .codex ? .chatGPT : nil))
+        }
+        if let emptied {
+            attention.append(Attention(id: "mcp.emptied", text: "\(emptied.name) has no MCP servers, so none are removed from \(emptied.other.name)",
+                                       level: .broken, fixes: changes.map(\.id).filter { $0 == "mcp.\(emptied).add" }))
         }
         // Changed or removed on one side since the last sync: one change per server, so each can stay as it is.
         for why in [Why.changed, .removed] {
@@ -268,42 +283,52 @@ public enum MCPSetup {
         var spec: MCPSpec? { if case .spec(let spec) = self { spec } else { nil } }
     }
 
-    static let keyNote = "The key is written in the file. Use ${VAR} to share it."
     static let cantTranslate = "OpenAccs can't translate its settings"
 
-    /// Claude's fields that translate. Any other field is Claude's own and stays when Claude's side is rewritten.
+    /// Claude's fields that translate. Any other field is Claude's own and stays when Claude's side is rewritten,
+    /// unless only HTTP servers have it and the server is now stdio.
     static let claudeFields: Set<String> = ["type", "command", "args", "env", "url", "headers", "headersHelper", "timeout"]
-    /// Codex's fields that translate (`env` and `http_headers` hold keys). Any other field (enabled_tools,
-    /// startup_timeout_sec, tools, cwd…) is Codex's own and stays when Codex's side is rewritten.
+    /// Claude's own fields that only HTTP servers have. Claude drops them from a stdio server.
+    static let claudeHTTPOnly: Set<String> = ["oauth", "request_timeout_ms", "tools", "toolPermissions", "discoveryCache"]
+    /// Codex's fields that translate (`env` and `http_headers` hold values written in the file). Any other field
+    /// (enabled_tools, startup_timeout_sec, tools, cwd…) is Codex's own and stays when Codex's side is rewritten,
+    /// unless it fits only the transport the server no longer has.
     static let codexFields: Set<String> = ["command", "args", "env", "env_vars", "url", "bearer_token_env_var", "http_headers",
                                            "env_http_headers", "http_headers_helper", "tool_timeout_sec"]
+    /// Codex's own fields that fit one transport only. Codex refuses the whole config.toml when a server has the other's.
+    static let codexStdioOnly: Set<String> = ["cwd"]
+    static let codexHTTPOnly: Set<String> = ["auth", "oauth", "oauth_resource"]
 
     static func translate(claude value: Any) -> Translation {
         guard let entry = value as? [String: Any] else { return .unshared(cantTranslate) }
         /// A field's value as T, `empty` when it is missing; nil when it is something else.
         func field<T>(_ key: String, _ empty: T) -> T? { entry[key] == nil ? empty : entry[key] as? T }
-        var spec = MCPSpec()
+        var spec = MCPSpec(), why: String?
         switch entry["type"] as? String ?? (entry["url"] == nil ? "stdio" : "http") {
         case "stdio":
             guard let command = entry["command"] as? String, let args = field("args", [String]()),
                   let env = field("env", [String: String]()) else { return .unshared(cantTranslate) }
             (spec.command, spec.args) = (command, args)
-            for (name, value) in env.sorted(by: { $0.key < $1.key }) {
-                guard let variable = reference(value) else { return .unshared(keyNote) }
-                guard variable == name else { return .unshared("Codex can pass \(name) only from a variable of the same name") }
-                spec.envVars.append(name)
+            for (name, value) in env.sorted(by: { $0.key < $1.key }) where why == nil {
+                let variable = reference(value)
+                if variable == name {
+                    spec.envVars.append(name)
+                } else {
+                    why = variable == nil ? "Claude's env holds values written in the file. Write each as ${NAME} to share it."
+                        : "Codex can pass \(name) only from a variable of the same name"
+                }
             }
-        case "http":
+        case "http", "streamable-http":   // Claude reads streamable-http as http.
             guard let url = entry["url"] as? String, let headers = field("headers", [String: String]()),
                   let helper = field("headersHelper", Optional<String>.none) else { return .unshared(cantTranslate) }
             (spec.url, spec.headersHelper) = (url, helper)
-            for (header, value) in headers {
+            for (header, value) in headers where why == nil {
                 if header.lowercased() == "authorization", value.hasPrefix("Bearer "), let variable = reference(String(value.dropFirst(7))) {
                     spec.bearerTokenEnvVar = variable
                 } else if let variable = reference(value) {
                     spec.envHeaders[header] = variable
                 } else {
-                    return .unshared(keyNote)
+                    why = "Claude's headers hold values written in the file. Write each as ${VAR} to share it."
                 }
             }
         case "sse": return .unshared("Codex has no SSE servers")
@@ -312,12 +337,11 @@ public enum MCPSetup {
         }
         guard let timeout = field("timeout", Optional<Int>.none) else { return .unshared(cantTranslate) }
         spec.timeoutMs = timeout
-        return checked(spec)
+        return checked(spec, why)
     }
 
     static func translate(codex value: TOMLValue) -> Translation {
         guard let table = value.table else { return .unshared(cantTranslate) }
-        if table["env"] != nil || table["http_headers"] != nil { return .unshared(keyNote) }
         /// A list of strings, [] when missing; nil when it is something else.
         func strings(_ key: String) -> [String]? {
             guard let value = table[key] else { return [] }
@@ -341,25 +365,44 @@ public enum MCPSetup {
         default:
             return .unshared(cantTranslate)
         }
-        switch table["tool_timeout_sec"] {
-        case nil: break
-        case .integer(let seconds)?: spec.timeoutMs = seconds * 1000
-        case .float(let seconds)? where seconds.isFinite: spec.timeoutMs = Int((seconds * 1000).rounded())
-        default: return .unshared(cantTranslate)
+        var timeoutNote: String?
+        if let timeout = table["tool_timeout_sec"] {
+            let seconds: Double
+            switch timeout {
+            case .integer(let value): seconds = Double(value)
+            case .float(let value): seconds = value
+            default: return .unshared(cantTranslate)
+            }
+            // Claude takes whole milliseconds above 0. A huge value (meant as "never") must not trap the scan.
+            if let milliseconds = Int(exactly: (seconds * 1000).rounded()), milliseconds > 0 {
+                spec.timeoutMs = milliseconds
+            } else {
+                timeoutNote = "Claude can't take its tool_timeout_sec"
+            }
         }
-        return checked(spec)
+        // Codex passes env and http_headers on as they are written, so they may hold keys.
+        let why = [table["enabled"] == .bool(false) ? "Turned off in Codex" : nil,
+                   table["env"] != nil ? "Codex's env holds values written in the file. List them in env_vars to share it." : nil,
+                   table["http_headers"] != nil ? "Codex's http_headers hold values written in the file. Use env_http_headers to share it." : nil,
+                   timeoutNote].compactMap { $0 }.first
+        return checked(spec, why)
     }
 
-    /// The spec, unless the server must stay where it is anyway.
-    static func checked(_ spec: MCPSpec) -> Translation {
+    /// The spec, unless the server must stay where it is: it runs from inside an app, its tool gave a reason
+    /// (`why`), or what would travel only Claude can read or holds a key.
+    static func checked(_ spec: MCPSpec, _ why: String? = nil) -> Translation {
         if let command = spec.command, command.contains(".app/") {
             let app = command.split(separator: "/").first { $0.hasSuffix(".app") }.map(String.init) ?? "an app"
             return .unshared("Runs from inside \(app), so it stays with that app")
         }
+        if let why { return .unshared(why) }
         // Claude expands ${VAR} in these; Codex passes them on as they are.
         if ([spec.command, spec.url].compactMap { $0 } + spec.args).contains(where: { $0.contains("${") }) {
             return .unshared("Uses ${…} in its command or URL, which only Claude expands")
         }
+        // Copied, a key would land in the other tool's file and show in the change's details.
+        if let url = spec.url, holdsKey(url: url) { return .unshared("Its URL holds what looks like a key, so it is not copied") }
+        if holdsKey(arguments: spec.args) { return .unshared("Its arguments hold what looks like a key, so it is not copied") }
         return .spec(spec)
     }
 
@@ -368,12 +411,45 @@ public enum MCPSetup {
         value.wholeMatch(of: /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/).map { String($0.1) }
     }
 
-    /// Claude's entry for `spec`, keeping the fields only Claude has from `old`.
+    /// A URL with a user or password, a query parameter named like a key (?exaApiKey=…), or a path part that looks
+    /// like one (mcp.zapier.com/api/mcp/s/<key>/mcp).
+    static func holdsKey(url text: String) -> Bool {
+        guard let url = URLComponents(string: text) else { return false }
+        return url.user != nil || url.password != nil
+            || (url.queryItems ?? []).contains { namesAKey($0.name) && !($0.value ?? "").isEmpty }
+            || url.path.split(separator: "/").contains { looksLikeKey(String($0)) }
+    }
+
+    /// Arguments with such a URL, `--api-key=…`, `API_KEY=…` or `Authorization: …`, a value after a flag named like
+    /// a key (`--api-key …`), or a token that looks like a key.
+    static func holdsKey(arguments: [String]) -> Bool {
+        arguments.indices.contains { i in
+            let argument = arguments[i]
+            if let url = argument.firstMatch(of: /https?:\/\/\S+/), holdsKey(url: String(url.0)) { return true }
+            if let separator = argument.firstIndex(where: { $0 == "=" || $0 == ":" }), namesAKey(String(argument[..<separator])),
+               !argument[argument.index(after: separator)...].allSatisfy(\.isWhitespace) { return true }
+            if argument.hasPrefix("-"), namesAKey(argument), i + 1 < arguments.count, !arguments[i + 1].hasPrefix("-") { return true }
+            return looksLikeKey(argument)
+        }
+    }
+
+    /// A name that says its value is a key: api_key, exaApiKey, --access-token, client_secret, Authorization…
+    static func namesAKey(_ name: String) -> Bool {
+        let letters = name.lowercased().filter(\.isLetter)
+        return ["key", "token", "secret", "password", "passwd", "auth", "authorization", "credential", "credentials"].contains { letters.hasSuffix($0) }
+    }
+
+    /// A long run of letters and digits with none of the marks a word, a path or a package name has, as most keys are.
+    static func looksLikeKey(_ text: String) -> Bool {
+        text.count >= 32 && text.wholeMatch(of: /[A-Za-z0-9_+=-]+/) != nil && text.contains(where: \.isLetter) && text.contains(where: \.isNumber)
+    }
+
+    /// Claude's entry for `spec`, keeping the fields only Claude has from `old` that fit its transport.
     static func claudeEntry(_ spec: MCPSpec, keeping old: [String: Any] = [:]) -> [String: Any] {
-        var entry = old.filter { !claudeFields.contains($0.key) }
+        var entry = old.filter { !claudeFields.contains($0.key) && (spec.command == nil || !claudeHTTPOnly.contains($0.key)) }
         if let command = spec.command {
-            (entry["type"], entry["command"]) = ("stdio", command)
-            if !spec.args.isEmpty { entry["args"] = spec.args }
+            // "args" even when empty: that is how Claude stores a stdio server, and Apply compares what it stored.
+            (entry["type"], entry["command"], entry["args"]) = ("stdio", command, spec.args)
             if !spec.envVars.isEmpty { entry["env"] = Dictionary(uniqueKeysWithValues: spec.envVars.map { ($0, "${\($0)}") }) }
         } else if let url = spec.url {
             (entry["type"], entry["url"]) = ("http", url)
@@ -386,9 +462,10 @@ public enum MCPSetup {
         return entry
     }
 
-    /// Codex's table for `spec`, keeping the fields only Codex has from `old`.
+    /// Codex's table for `spec`, keeping the fields only Codex has from `old` that fit its transport.
     static func codexTable(_ spec: MCPSpec, keeping old: [String: TOMLValue] = [:]) -> [String: TOMLValue] {
-        var table = old.filter { !codexFields.contains($0.key) }
+        let otherTransport = spec.command == nil ? codexStdioOnly : codexHTTPOnly
+        var table = old.filter { !codexFields.contains($0.key) && !otherTransport.contains($0.key) }
         if let command = spec.command {
             table["command"] = .string(command)
             if !spec.args.isEmpty { table["args"] = .array(spec.args.map(TOMLValue.string)) }
