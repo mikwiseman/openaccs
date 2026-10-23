@@ -10,7 +10,7 @@ public struct SyncOperation: Sendable, Hashable {
         case update
         /// An OpenAccs-made copy of a deleted session moves to Backups (stopped profiles only).
         case remove
-        /// A stopped profile's sidebar gets the agreed pins (`file` is its config; no `cliSessionId`).
+        /// A stopped profile's sidebar gets the agreed pins: its localStorage, then its config (`file`; no `cliSessionId`).
         case pins
     }
 
@@ -29,8 +29,9 @@ public struct SyncOperation: Sendable, Hashable {
     var settles: [String: String]?
     /// Keep a copy of the old card first; not needed when only its activity time moves on.
     var backup = true
-    /// The chats the sidebar pins once written (pins).
+    /// The chats the sidebar pins once written, and the card sessionIds it pins them by (pins).
     var pins: [String]?
+    var pinIds: [String]?
 }
 
 public struct SyncPlan: Sendable, Hashable {
@@ -255,8 +256,10 @@ public struct CardSync: Sendable {
                     }
                 case .pins:
                     let stopped = claude.runningByPath().map { $0[op.dataDir.standardizedFileURL.path] == nil } ?? false
+                    // localStorage is what the app reads at launch; without it the config change would be undone.
                     guard stopped, FS.isRegularFile(op.file), let contents = op.contents, let expected = op.expected,
-                          (try? Data(contentsOf: op.file)) == expected else {
+                          (try? Data(contentsOf: op.file)) == expected, let value = op.pinIds.flatMap({ PinList.storageValue($0) }),
+                          ChromiumLocalStorage.set(value, for: PinList.storageKey, origin: PinList.origin, in: op.dataDir) else {
                         report.skipped += 1
                         continue
                     }
@@ -294,8 +297,8 @@ public struct CardSync: Sendable {
         }.count
     }
 
-    /// Every sidebar brought to the agreed pins: a stopped profile's config gets them (nothing else in it
-    /// changes); an open one counts them as waiting until it restarts. A chat is pinned there by the card the
+    /// Every sidebar brought to the agreed pins: a stopped profile's localStorage and config get them (nothing
+    /// else in either changes); an open one counts them as waiting until it restarts. A chat is pinned there by the card the
     /// app shows (in its current folder, including one this sync creates), or by the card it pins it by already.
     func pinPlan(profiles: [ClaudeProfile], running: Set<String>, scan: Scan, creating: [SyncOperation])
         -> (operations: [SyncOperation], agreed: [String]?, seen: [String: [String]], waiting: [String: Int]) {
@@ -349,9 +352,9 @@ public struct CardSync: Sendable {
                 continue
             }
             let ids = shown.compactMap { window.card[$0] } + window.unknown
-            guard ids != window.list.ids, let data = window.list.with(ids) else { continue }
+            guard Set(ids) != Set(window.list.ids), let data = window.list.with(ids) else { continue }
             operations.append(SyncOperation(kind: .pins, dataDir: window.profile.dataDir, file: window.list.file, cliSessionId: "",
-                                            contents: data, expected: window.list.raw, pins: shown))
+                                            contents: data, expected: window.list.raw, pins: shown, pinIds: ids))
         }
         return (operations, agreed, seen, waiting)
     }

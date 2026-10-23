@@ -1,14 +1,25 @@
 import Foundation
 import OpenAccsCore
 
-/// The chats pinned in a profile's sidebar: `preferences.epitaxyPrefs` in its `claude_desktop_config.json`.
-/// `starred-local-code-sessions` names the pinned cards by sessionId, and the sidebar orders them by their
-/// place in `dframe-local-slice.pinnedOrder` (`code:<sessionId>`). A card's own `isStarred` is a copy Claude
-/// makes from this list. Claude keeps the file in memory while it runs and writes it back.
+/// The chats pinned in a profile's sidebar. The app keeps them in its localStorage
+/// (`LSS-persisted.starred-local-code-sessions`, card sessionIds) and copies every change into
+/// `preferences.epitaxyPrefs` of its `claude_desktop_config.json`, which it reads back only when localStorage
+/// has no pins. So the config tells what a profile pins, and a change goes into both. The sidebar orders pins
+/// by their place in `dframe-local-slice.pinnedOrder` (`code:<sessionId>`), another store. A card's own
+/// `isStarred` is a copy the app makes from the list.
 struct PinList {
     static let starredKey = "starred-local-code-sessions"
     static let sliceKey = "dframe-local-slice"
     static let orderKey = "pinnedOrder"
+    static let origin = "https://claude.ai"
+    static let storageKey = "LSS-persisted.starred-local-code-sessions"
+
+    /// The localStorage value for these pins, as the app writes it.
+    static func storageValue(_ ids: [String], now: Date = Date()) -> String? {
+        let object: [String: Any] = ["value": ids, "tabId": "", "timestamp": Int64(now.timeIntervalSince1970 * 1000)]
+        return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]))
+            .flatMap { String(data: $0, encoding: .utf8) }
+    }
 
     var file: URL
     var raw: Data
@@ -71,10 +82,10 @@ struct PinList {
     }
 }
 
-/// The chats every sidebar should pin, in order (by cliSessionId). Merged per chat like the chat settings:
-/// what a profile pinned or unpinned since the last sync is a change (the newest config wins when two
-/// disagree), anything else keeps the last agreement. A first sync, or a profile seen for the first time,
-/// keeps every pin. The order is the one of the profile changed last.
+/// The chats every sidebar should pin (by cliSessionId). Merged per chat like the chat settings: what a
+/// profile pinned or unpinned since the last sync is a change (the newest config wins when two disagree),
+/// anything else keeps the last agreement. A first sync, or a profile seen for the first time, keeps every
+/// pin. Only which chats are pinned counts, not their order (the app keeps that elsewhere).
 enum PinAgreement {
     struct Holder {
         /// What its sidebar pins now, and what it pinned at the last sync (nil: never seen).
@@ -88,14 +99,12 @@ enum PinAgreement {
         func add(_ chats: [String]) { result += chats.filter { !result.contains($0) } }
         let newest = holders.sorted { $0.modified > $1.modified }
         for holder in newest where agreed == nil || holder.seen == nil { add(holder.now) }
-        let changed = holders.filter { $0.seen != nil && $0.seen != $0.now }.sorted { $0.modified < $1.modified }
+        let changed = holders.filter { holder in holder.seen.map { Set($0) != Set(holder.now) } ?? false }
+            .sorted { $0.modified < $1.modified }
         for holder in changed {
             let seen = Set(holder.seen ?? [])
             result.removeAll { seen.contains($0) && !holder.now.contains($0) }
             add(holder.now.filter { !seen.contains($0) })
-        }
-        if let last = changed.last ?? (agreed == nil ? newest.first : nil) {
-            result = last.now.filter(result.contains) + result.filter { !last.now.contains($0) }
         }
         return result.filter { !deleted.contains($0) }
     }

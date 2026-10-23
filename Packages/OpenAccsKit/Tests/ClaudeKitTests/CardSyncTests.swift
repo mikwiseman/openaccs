@@ -67,10 +67,13 @@ extension TempHome {
         profile.cardsDir!.appending(path: session.file)
     }
 
-    /// A profile's desktop config: the chats pinned in its sidebar (card sessionIds, in this order) and
-    /// settings that are not OpenAccs's business, an MCP server key among them.
+    /// The chats a profile's app pins (card sessionIds, in this order), saved the way the app saves them: in its
+    /// localStorage, and copied into its desktop config next to settings that are not OpenAccs's business
+    /// (an MCP server key among them).
     @discardableResult
     fileprivate func pins(_ profile: ClaudeProfile, _ ids: [String]) throws -> URL {
+        try localStorage(profile)
+        #expect(ChromiumLocalStorage.set(PinList.storageValue(ids)!, for: PinList.storageKey, origin: PinList.origin, in: profile.dataDir))
         let config: [String: Any] = [
             "mcpServers": ["linear": ["command": "npx", "env": ["LINEAR_API_KEY": "lin_secret"]]],
             "preferences": ["ccNewTaskPrompt": "ask", "epitaxyPrefs": [
@@ -85,9 +88,51 @@ extension TempHome {
         return file
     }
 
-    /// The sessionIds a profile's sidebar shows pinned, in order.
+    /// A localStorage database like a profile's app leaves it, with one unrelated value in it.
+    fileprivate func localStorage(_ profile: ClaudeProfile) throws {
+        let dir = storageDir(profile)
+        guard !FS.exists(dir) else { return }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let edit: [UInt8] = [1] + LevelDB.varint(26) + Array("leveldb.BytewiseComparator".utf8)
+            + [2] + LevelDB.varint(3) + [3] + LevelDB.varint(4) + [4] + LevelDB.varint(7)
+        try Data(LevelDB.framed(edit, after: 0)).write(to: dir.appending(path: "MANIFEST-000001"))
+        try Data("MANIFEST-000001\n".utf8).write(to: dir.appending(path: "CURRENT"))
+        let other = LevelDB.putBatch(key: ChromiumLocalStorage.key("theme", origin: PinList.origin), value: ChromiumLocalStorage.encoded("dark"), sequence: 8)
+        try Data(LevelDB.framed(other, after: 0)).write(to: dir.appending(path: "000003.log"))
+        try Data().write(to: dir.appending(path: "LOCK"))
+    }
+
+    fileprivate func storageDir(_ profile: ClaudeProfile) -> URL {
+        profile.dataDir.appending(path: "Local Storage/leveldb", directoryHint: .isDirectory)
+    }
+
+    /// The sessionIds a profile's app shows pinned at its next launch: the newest pins in its localStorage.
     fileprivate func pinned(_ profile: ClaudeProfile) -> [String] {
-        PinList(dataDir: profile.dataDir)?.ids ?? []
+        guard let raw = storageValue(profile, PinList.storageKey), let object = JSON.object(Data(raw.utf8)) else { return [] }
+        return object["value"] as? [String] ?? []
+    }
+
+    /// The newest value of a localStorage key, read back from the log.
+    fileprivate func storageValue(_ profile: ClaudeProfile, _ key: String) -> String? {
+        guard let log = try? Data(contentsOf: storageDir(profile).appending(path: "000003.log")),
+              let records = LevelDB.records([UInt8](log)) else { return nil }
+        var value: String?
+        for batch in records {
+            var i = 12
+            while i < batch.count {
+                let tag = batch[i]
+                i += 1
+                guard let n = LevelDB.readVarint(batch, &i) else { return nil }
+                let k = Array(batch[i..<i + Int(n)])
+                i += Int(n)
+                guard tag == 1, let m = LevelDB.readVarint(batch, &i) else { continue }
+                if k == ChromiumLocalStorage.key(key, origin: PinList.origin) {
+                    value = String(decoding: batch[i + 1..<i + Int(m)], as: UTF8.self)
+                }
+                i += Int(m)
+            }
+        }
+        return value
     }
 
     /// Card file names in a profile's current folder (everything, including tombstones).
@@ -714,6 +759,8 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         try sync(home, [a, b])
 
         #expect(home.pinned(b) == [s1.sessionId])
+        #expect(PinList(dataDir: b.dataDir)?.ids == [s1.sessionId])
+        #expect(home.storageValue(b, "theme") == "dark")
         // Nothing else in B's config changes, and it stays private.
         let config = home.json(at: configB)
         let linear = (config["mcpServers"] as? [String: Any])?["linear"] as? [String: Any]
@@ -766,7 +813,7 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(home.pinned(b) == [s.sessionId])
     }
 
-    @Test func firstSyncKeepsEveryPinInTheOrderOfTheWindowChangedLast() throws {
+    @Test func firstSyncKeepsEveryPinAndAnOrderChangeAloneWritesNothing() throws {
         let home = try TempHome()
         let a = home.profile("A"), b = home.profile("B")
         let s1 = Session(), s2 = Session(), s3 = Session()
@@ -785,10 +832,29 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(home.pinned(a) == all)
         #expect(home.pinned(b) == all)
 
-        // Reordered in A: B follows.
-        try home.pins(a, [s3.sessionId, s2.sessionId, s1.sessionId])
-        try sync(home, [a, b])
-        #expect(home.pinned(b) == [s3.sessionId, s2.sessionId, s1.sessionId])
+        // Reordered in A: the app keeps the order in another store, so nothing is written.
+        try home.pins(a, [s3.sessionId, s1.sessionId, s2.sessionId])
+        #expect(try sync(home, [a, b]).0.operations.isEmpty)
+    }
+
+    @Test func aProfileWhoseLocalStorageCantBeWrittenKeepsItsPins() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s = Session()
+        try home.card(a, s.card())
+        try home.card(b, s.card())
+        try home.transcript(s)
+        try home.pins(a, [s.sessionId])
+        let configB = try home.pins(b, [])
+        try FileManager.default.removeItem(at: home.storageDir(b))   // never opened, or not in the shape expected
+        let bytes = try Data(contentsOf: configB)
+
+        let (plan, report) = try sync(home, [a, b])
+
+        #expect(plan.count(.pins, for: b.dataDir) == 1)
+        #expect(report.skipped == 1)
+        // The app would put its old pins back from localStorage: the config is not touched either.
+        #expect(try Data(contentsOf: configB) == bytes)
     }
 
     @Test func pinsOfCardsOpenAccsDoesNotKnowStayAndDeletedChatsAreUnpinned() throws {
