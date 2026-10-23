@@ -198,6 +198,18 @@ func value(_ object: [String: Any]?, _ place: [String]) -> NSObject? {
         #expect(report.items.map(\.note) == ["1 setting differs", "8 settings differ"])
     }
 
+    @Test func aNewProfileUsedLastDoesNotOverrideTheOneSomeoneSetUp() throws {
+        let home = try SetupHome()
+        let hi = try home.claudeProfile("hi", account: "acct-hi", config: ClaudeConfigs.hi)
+        let ai41 = try home.claudeProfile("ai41", account: "acct-41", config: ClaudeConfigs.ai41, modified: base + 600)
+
+        // ai41 is the window used last, but hi has far more of these settings: hi's win on the first sync.
+        let report = ClaudeAppSetup.scan(home.claudeContext([ai41, hi]))
+
+        #expect(report.changes.map(\.title) == ["ai41 gets 8 settings from hi", "hi gets 1 setting from ai41"])
+        #expect(report.changes.map(\.id) == ["claudeApp.ai41", "claudeApp.hi"])
+    }
+
     @Test func onlyTheSharedSettingsChangeAndEveryOtherKeyKeepsItsValue() throws {
         #expect(ClaudeAppSetup.all.flatMap { $0 }.allSatisfy { key in
             ["Consent", "OptIn", "Gate", "Seen", "Nudge", "Ack", "Intro", "Onboarding", "Count"].allSatisfy { !key.contains($0) }
