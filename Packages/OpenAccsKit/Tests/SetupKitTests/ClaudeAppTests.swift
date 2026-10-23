@@ -421,7 +421,8 @@ func value(_ object: [String: Any]?, _ place: [String]) -> NSObject? {
         let preferences = try #require(seeded["preferences"] as? [String: Any])
         #expect(Set(preferences.keys) == ["bypassPermissionsModeEnabled", "dispatchCodeTasksPermissionMode", "menuBarEnabled",
                                           "ccdScheduledTasksEnabled", "sidebarMode", "epitaxyPrefs"])
-        #expect(Set((preferences["epitaxyPrefs"] as? [String: Any] ?? [:]).keys) == ["fastMode", "cc-landing-draft-permission-mode"])
+        #expect(Set((preferences["epitaxyPrefs"] as? [String: Any] ?? [:]).keys) == ["fastMode", "cc-landing-draft-permission-mode", "starred-local-code-sessions"])
+        #expect(value(seeded, ["preferences", "epitaxyPrefs", "starred-local-code-sessions"]) == value(home.config(hi), ["preferences", "epitaxyPrefs", "starred-local-code-sessions"]))
         #expect(value(seeded, ["mcpServers"]) == value(home.config(hi), ["mcpServers"]))
 
         // Never over a file that is there, and nothing from a profile without one.

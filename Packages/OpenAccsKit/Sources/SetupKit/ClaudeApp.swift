@@ -103,7 +103,9 @@ public enum ClaudeAppSetup {
     public static func seed(_ dataDir: URL, from source: URL) throws {
         guard let raw = try? Data(contentsOf: configFile(source)), let object = JSON.object(raw) else { return }
         var seeded: [String: Any] = [:]
-        for place in shared {
+        // A new profile also starts with the source's pins: its chats get the same card names, and the app reads
+        // pins from here while its own storage is still empty. (Afterwards pin sync keeps them the same.)
+        for place in shared + [["preferences", "epitaxyPrefs", "starred-local-code-sessions"]] {
             if let value = Self.value(at: place, in: object) { seeded = Self.setting(place[...], to: value, in: seeded) }
         }
         guard !seeded.isEmpty, let data = serialize(seeded) else { return }
