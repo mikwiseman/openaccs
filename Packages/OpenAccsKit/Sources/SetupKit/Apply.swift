@@ -17,6 +17,10 @@ public struct HistoryEntry: Codable, Sendable, Hashable, Identifiable {
     public var title: String
     public var undo: [FileOperation]
     public var undoneAt: Date?
+    /// The change's id, what it needed and the app it waited for, which its Undo respects too (nil in older History).
+    public var changeID: String?
+    public var requires: [String]?
+    public var waitsFor: SetupApp?
 }
 
 public struct ApplyResult: Sendable {
@@ -69,7 +73,8 @@ public struct SetupApplier: Sendable {
                 for operation in change.operations {
                     undo.insert(contentsOf: try perform(operation, backups: backups), at: 0)
                 }
-                let entry = HistoryEntry(id: UUID(), date: now, area: change.area, title: change.title, undo: undo)
+                let entry = HistoryEntry(id: UUID(), date: now, area: change.area, title: change.title, undo: undo,
+                                         changeID: change.id, requires: change.requires, waitsFor: change.waitsFor)
                 try save(history().filter { now.timeIntervalSince($0.date) < Self.keepHistory } + [entry])
                 result.applied.append(entry)
                 done.insert(change.id)
@@ -81,15 +86,29 @@ public struct SetupApplier: Sendable {
         return result
     }
 
-    /// Undoes one applied change. Throws when something changed since, and leaves things as they are then.
+    /// Undoes one applied change, all or nothing, like Apply: it throws and leaves things as they are when its app
+    /// is open, a later change still needs it, something changed since, a backup is gone, or a step fails.
     public func undo(_ id: UUID, now: Date = Date()) throws {
         var all = history()
         guard let i = all.firstIndex(where: { $0.id == id }), all[i].undoneAt == nil else { throw SetupError.nothingToUndo }
-        guard isAsPlanned(all[i].undo) else { throw SetupError.changedSince }
+        let entry = all[i]
+        if let app = entry.waitsFor, context.isRunning(app) { throw SetupError.appRunning(Self.name(app)) }
+        if let change = entry.changeID,
+           let later = all[(i + 1)...].first(where: { $0.undoneAt == nil && $0.requires?.contains(change) == true }) {
+            throw SetupError.neededBy(later.title)
+        }
+        guard isAsPlanned(entry.undo) else { throw SetupError.changedSince }
+        for case .restore(_, let backup, _) in entry.undo where FileState.of(URL(filePath: backup)) == .absent { throw SetupError.backupGone }
         let backups = context.paths.backupsDir.appending(path: "\(Self.stamp(now)) setup undo", directoryHint: .isDirectory)
-        for operation in all[i].undo { _ = try perform(operation, backups: backups) }
-        all[i].undoneAt = now
-        try save(all)
+        var redo: [FileOperation] = []
+        do {
+            for operation in entry.undo { redo.insert(contentsOf: try perform(operation, backups: backups), at: 0) }
+            all[i].undoneAt = now
+            try save(all)
+        } catch {
+            for operation in redo { _ = try? perform(operation, backups: backups) }
+            throw error
+        }
     }
 
     // MARK: Operations
@@ -100,10 +119,13 @@ public struct SetupApplier: Sendable {
         for operation in operations {
             switch operation {
             case .claudeMCP(let name, _, let expected):
-                guard let config = MCPSetup.readClaude(context), config.servers[name].map({ MCPSetup.json($0) }) == expected else { return false }
+                guard claudeHolds(name, expected) else { return false }
             case .toml(let path, let table, let key, _, let expected):
                 guard seen.insert("toml:\(path):\(table + [key])").inserted else { continue }
                 guard let file = readTOML(path), file.value(key, in: table) == expected else { return false }
+            case .json(let path, let key, _, let expected):
+                guard seen.insert("json:\(path):\(key)").inserted else { continue }
+                guard let object = readJSON(path), Self.jsonText(object[key]) == expected else { return false }
             case .write(let path, _, _, let expected), .link(let path, _, let expected), .remove(let path, let expected),
                  .restore(let path, _, let expected):
                 guard seen.insert(path).inserted else { continue }
@@ -122,7 +144,7 @@ public struct SetupApplier: Sendable {
     func perform(_ operation: FileOperation, backups: URL) throws -> [FileOperation] {
         switch operation {
         case .claudeMCP(let name, let value, let expected):
-            guard let config = MCPSetup.readClaude(context), config.servers[name].map({ MCPSetup.json($0) }) == expected else { throw SetupError.changedSince }
+            guard claudeHolds(name, expected) else { throw SetupError.changedSince }
             if expected != nil {
                 guard context.run(MCPSetup.removeCommand(name))?.status == 0 else { throw SetupError.commandFailed("claude mcp remove") }
             }
@@ -130,7 +152,7 @@ public struct SetupApplier: Sendable {
                 if let expected { _ = context.run(["claude", "mcp", "add-json", "--scope", "user", name, expected]) }
                 throw SetupError.commandFailed("claude mcp add-json")
             }
-            guard let after = MCPSetup.readClaude(context), after.servers[name].map({ MCPSetup.json($0) }) == value else {
+            guard claudeHolds(name, value) else {
                 _ = context.run(MCPSetup.removeCommand(name))
                 if let expected { _ = context.run(["claude", "mcp", "add-json", "--scope", "user", name, expected]) }
                 throw SetupError.commandFailed("claude mcp verification")
@@ -144,6 +166,13 @@ public struct SetupApplier: Sendable {
             let url = URL(filePath: path)
             let mode = (try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? Int ?? 0o600
             return try perform(.write(path: path, contents: Data(file.text.utf8), permissions: mode, expected: FileState.of(url)), backups: backups)
+        case .json(let path, let key, let value, let expected):
+            guard var object = readJSON(path), Self.jsonText(object[key]) == expected,
+                  let new = try? JSONSerialization.jsonObject(with: Data(value.utf8), options: .fragmentsAllowed) else { throw SetupError.changedSince }
+            object[key] = new
+            guard let data = ClaudeAppSetup.serialize(object) else { throw SetupError.changedSince }
+            let mode = (try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? Int ?? 0o600
+            return try perform(.write(path: path, contents: data, permissions: mode, expected: FileState.of(URL(filePath: path))), backups: backups)
         case .write(let path, let contents, let permissions, let expected):
             let url = URL(filePath: path)
             let saved = try backUp(url, expected: expected, into: backups, keepOriginal: true)
@@ -167,12 +196,24 @@ public struct SetupApplier: Sendable {
             return [.move(path: destination, destination: path, expected: FileState.of(to))]
         case .restore(let path, let backup, let expected):
             let url = URL(filePath: path)
-            if expected != .absent, FileState.of(url) != .absent {
-                _ = try backUp(url, expected: expected, into: backups, keepOriginal: false)
-            }
+            // Copied in next to it first, so a copy that fails leaves what is there in place.
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(atPath: backup, toPath: path)
-            return []
+            let copy = url.deletingLastPathComponent().appending(path: ".openaccs-\(UUID().uuidString).partial")
+            do { try FileManager.default.copyItem(atPath: backup, toPath: copy.path) } catch {
+                try? FileManager.default.removeItem(at: copy)
+                throw error
+            }
+            let restored = FileState.of(copy)
+            var saved: String?
+            do {
+                if expected != .absent, FileState.of(url) != .absent { saved = try backUp(url, expected: expected, into: backups, keepOriginal: false) }
+                try FileManager.default.moveItem(at: copy, to: url)
+            } catch {
+                if let saved { try? FileManager.default.moveItem(atPath: saved, toPath: path) }
+                try? FileManager.default.removeItem(at: copy)
+                throw error
+            }
+            return [.remove(path: path, expected: restored)] + (saved.map { [.restore(path: path, backup: $0, expected: .absent)] } ?? [])
         case .command(let argv, let undo):
             guard let run = context.run(argv), run.status == 0 else {
                 throw SetupError.commandFailed(argv.prefix(3).joined(separator: " "))
@@ -195,6 +236,18 @@ public struct SetupApplier: Sendable {
         return slot.path
     }
 
+    /// Whether Claude holds `entry` (JSON; nil: no server) under `name`. `claude mcp add-json` stores a stdio
+    /// server without args with "args": [], so an empty args list counts as none.
+    private func claudeHolds(_ name: String, _ entry: String?) -> Bool {
+        guard let config = MCPSetup.readClaude(context) else { return false }
+        func kept(_ entry: Any?) -> String? {
+            guard var object = entry as? [String: Any] else { return entry.map { MCPSetup.json($0) } }
+            if (object["args"] as? [Any])?.isEmpty == true { object["args"] = nil }
+            return MCPSetup.json(object)
+        }
+        return kept(config.servers[name]) == entry.flatMap { kept(JSON.object(Data($0.utf8))) }
+    }
+
     private func save(_ entries: [HistoryEntry]) throws {
         try AtomicFile.write(JSON.encoder.encode(entries), to: historyFile, permissions: 0o600)
     }
@@ -202,6 +255,17 @@ public struct SetupApplier: Sendable {
     private func readTOML(_ path: String) -> TOMLFile? {
         if FileState.of(URL(filePath: path)) == .absent { return TOMLFile(text: "") }
         return (try? String(contentsOfFile: path, encoding: .utf8)).flatMap(TOMLFile.init(text:))
+    }
+
+    private func readJSON(_ path: String) -> [String: Any]? {
+        if FileState.of(URL(filePath: path)) == .absent { return [:] }
+        return (try? Data(contentsOf: URL(filePath: path))).flatMap(JSON.object)
+    }
+
+    /// A JSON value as text with sorted keys, so equal values read alike; nil when there is none.
+    static func jsonText(_ value: Any?) -> String? {
+        value.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes]) }
+            .map { String(decoding: $0, as: UTF8.self) }
     }
 
     static func name(_ app: SetupApp) -> String {
@@ -220,14 +284,21 @@ public struct SetupApplier: Sendable {
 }
 
 public enum SetupError: LocalizedError, Equatable {
-    case nothingToUndo, changedSince
+    case nothingToUndo, changedSince, backupGone
     case commandFailed(String)
+    /// The app (by name) that keeps the file in memory is open.
+    case appRunning(String)
+    /// A later change (by title) that is still applied needs this one.
+    case neededBy(String)
 
     public var errorDescription: String? {
         switch self {
         case .nothingToUndo: "There is nothing to undo."
         case .changedSince: "Something changed since; nothing was undone."
+        case .backupGone: "Its backup is gone from Backups; nothing was undone."
         case .commandFailed(let what): "\(what) failed."
+        case .appRunning(let app): "Close \(app) first; nothing was undone."
+        case .neededBy(let title): "Undo “\(title)” first, it needs this; nothing was undone."
         }
     }
 }

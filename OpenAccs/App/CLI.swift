@@ -121,7 +121,7 @@ private struct Command {
             if let conflict = reports.attention.first(where: { $0.fixes.count > 1 && chosenIDs.intersection($0.fixes).count > 1 }) {
                 throw Failure.usage("Choose one option for: \(conflict.text)")
             }
-            for change in chosen { print("  \(change.title)\(change.waitsFor == nil ? "" : " (once that app is closed)")") }
+            for change in chosen { print("  \(change.title)\(change.waitsFor == nil ? "" : " (skipped while its app is open)")") }
             if flags.contains("--dry-run") { return }
             try confirm("Apply \(chosen.count) change\(chosen.count == 1 ? "" : "s")?")
             let result = applier.apply(chosen)
@@ -135,6 +135,8 @@ private struct Command {
                 print("\(n + 1)  \(entry.date.formatted(date: .abbreviated, time: .shortened))  \(entry.title)\(entry.undoneAt == nil ? "" : "  (undone)")")
             }
         case "undo":
+            // Undo has no preview, so a preview flag must never undo for real.
+            if flags.contains("--dry-run") { throw Failure.usage("setup undo doesn't take --dry-run. Run openaccs help.") }
             let entries = Array(applier.history().reversed())
             guard args.count == 2, let n = Int(args[1]), entries.indices.contains(n - 1) else {
                 throw Failure.usage("Undo which? openaccs setup undo <number from openaccs setup history>")

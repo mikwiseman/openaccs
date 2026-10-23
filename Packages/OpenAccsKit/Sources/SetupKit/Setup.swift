@@ -145,6 +145,9 @@ public struct SetupChange: Codable, Sendable, Hashable, Identifiable {
 public enum FileOperation: Codable, Sendable, Hashable {
     /// Edit one TOML key or MCP table, checking that value and keeping unrelated edits from other areas.
     case toml(path: String, table: [String], key: String, value: TOMLValue?, expected: TOMLValue?)
+    /// Set one top-level key of a JSON object file (values as JSON text; nil: not there), checking that key's value
+    /// and keeping every other key, which the file's own tool may have changed since.
+    case json(path: String, key: String, value: String, expected: String?)
     /// One user-scope Claude MCP server, changed through Claude's CLI and checked before Apply and Undo.
     case claudeMCP(name: String, value: String?, expected: String?)
     /// Create or replace a file atomically.

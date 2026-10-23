@@ -83,6 +83,90 @@ import Testing
         #expect(config.mcpServers["b"]?.table?["command"] == .string("claude-b"))
     }
 
+    @Test func undoWaitsWhileChatGPTRuns() throws {
+        let home = try SetupHome()
+        let on = "[desktop]\nexternal-agent-import-sync-enabled = true\n"
+        try home.write(".codex/config.toml", on)
+        let turnOff = try #require(ImportSyncSetup.scan(home.context()).changes.first { $0.id == "importSync.turn-off" })
+        let entry = try #require(SetupApplier(context: home.context()).apply([turnOff]).applied.first)
+
+        // ChatGPT opened since: it keeps config.toml in memory and would save its copy over the undo.
+        #expect(throws: SetupError.appRunning("ChatGPT")) { try SetupApplier(context: home.context(running: [.chatGPT])).undo(entry.id) }
+        #expect(home.read(".codex/config.toml") == on.replacingOccurrences(of: "true", with: "false"))
+        try SetupApplier(context: home.context()).undo(entry.id)
+        #expect(home.read(".codex/config.toml") == on)
+    }
+
+    @Test func undoIsRefusedWhileALaterChangeNeedsIt() throws {
+        let home = try SetupHome()
+        let claude = try home.write(".claude/CLAUDE.md", "# Mine\n")
+        let old = try home.write(".agents.md", "# Old\n")
+        try FileManager.default.createDirectory(atPath: home.path(".codex"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home.path(".codex/AGENTS.md"), withDestinationPath: old)
+        let changes = InstructionsSetup.scan(home.context()).changes
+        #expect(changes.map(\.id) == ["instructions.link-codex", "instructions.remove-old-copy"])
+        let applier = SetupApplier(context: home.context())
+        let applied = applier.apply(changes).applied
+
+        // Undone alone, Codex would link to the removed copy again and read nothing.
+        #expect(throws: SetupError.neededBy("Remove the old copy ~/.agents.md")) { try applier.undo(applied[0].id) }
+        #expect(home.linkTarget(".codex/AGENTS.md") == claude)
+        try applier.undo(applied[1].id)
+        try applier.undo(applied[0].id)
+        #expect(home.linkTarget(".codex/AGENTS.md") == old && home.read(".agents.md") == "# Old\n")
+    }
+
+    /// `claude mcp` as Claude Code 2.1 runs it: a stdio server without args is stored with "args": [].
+    func claudeLike(_ home: SetupHome) -> @Sendable ([String]) -> (status: Int32, output: String)? {
+        { argv in
+            guard argv.count >= 6, argv[0] == "claude" else { return nil }
+            var object = (try? JSONSerialization.jsonObject(with: Data(contentsOf: home.url.appending(path: ".claude.json")))) as? [String: Any] ?? [:]
+            var servers = object["mcpServers"] as? [String: Any] ?? [:]
+            if argv[2] == "remove" {
+                servers[argv[5]] = nil
+            } else {
+                guard var entry = (try? JSONSerialization.jsonObject(with: Data(argv[6].utf8))) as? [String: Any] else { return (1, "") }
+                if entry["url"] == nil, entry["args"] == nil { entry["args"] = [String]() }
+                servers[argv[5]] = entry
+            }
+            object["mcpServers"] = servers
+            do { try home.write(".claude.json", MCPSetup.json(object)); return (0, "") } catch { return (1, "") }
+        }
+    }
+
+    @Test func aStdioServerWithoutArgsReachesClaudeAndUndoes() throws {
+        let home = try SetupHome()
+        try home.write(".claude.json", #"{"mcpServers":{}}"#)
+        try home.write(".codex/config.toml", "[mcp_servers.local]\ncommand = \"local-mcp\"\n")
+        let context = home.context(run: claudeLike(home))
+        let add = try #require(MCPSetup.scan(context).changes.first { $0.id == "mcp.claude.add" })
+        let applier = SetupApplier(context: context)
+
+        let result = applier.apply([add])
+
+        #expect(result.skipped.isEmpty)
+        #expect(MCPSetup.scan(context).changes.isEmpty)
+        try applier.undo(try #require(result.applied.first).id)
+        #expect(MCPSetup.readClaude(context)?.servers.isEmpty == true)
+    }
+
+    @Test func undoingARemovalBringsBackAClaudeEntryWithoutArgs() throws {
+        let home = try SetupHome()
+        try home.write(".claude.json", #"{"mcpServers":{"eye":{"command":"/opt/eye","type":"stdio"}}}"#)
+        try home.write(".codex/config.toml", "[mcp_servers.eye]\ncommand = \"/opt/eye\"\n")
+        let context = home.context(run: claudeLike(home))
+        let applier = SetupApplier(context: context)
+        #expect(applier.apply(MCPSetup.scan(context).changes).applied.count == 1)   // remembers eye as the same in both
+        try home.write(".codex/config.toml", "")   // then removed from Codex
+        let removal = try #require(MCPSetup.scan(context).changes.first { $0.id == "mcp.claude.removed.eye" })
+        let entry = try #require(applier.apply([removal]).applied.first)
+        #expect(MCPSetup.readClaude(context)?.servers["eye"] == nil)
+
+        try applier.undo(entry.id)
+
+        #expect((MCPSetup.readClaude(context)?.servers["eye"] as? [String: Any])?["command"] as? String == "/opt/eye")
+    }
+
     @Test func aggregatorReportsAllSixAreasWithoutApplying() throws {
         let home = try SetupHome()
         let reports = OneSetup.scan(home.context())

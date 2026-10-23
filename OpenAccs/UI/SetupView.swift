@@ -39,7 +39,8 @@ struct SetupView: View {
                             Spacer()
                             if !entry.item.fixes.isEmpty {
                                 Button(entry.item.fixes.count > 1 ? "Choose…" : "Fix…") {
-                                    reviewing = entry.item.fixes.count > 1 ? [] : Set(entry.item.fixes)
+                                    // With what the fix needs, or Apply would skip it.
+                                    reviewing = entry.item.fixes.count > 1 ? [] : model.changes.includingRequirements(Set(entry.item.fixes))
                                 }
                             }
                         }
@@ -256,9 +257,9 @@ private struct ChangeRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(change.title)
                 if change.waitsFor == .chatGPT {
-                    Text("Applies once ChatGPT is closed.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Skipped while ChatGPT is open. Close it, then apply.").font(.system(size: 11)).foregroundStyle(.secondary)
                 } else if change.waitsFor != nil {
-                    Text("Applies once that Claude window is closed.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Skipped while that Claude window is open. Close it, then apply.").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 if let detail = change.detail, !detail.isEmpty {
                     DisclosureGroup("Details") {
@@ -294,6 +295,9 @@ private struct HistorySheet: View {
                         Text("\(entry.date.formatted(date: .abbreviated, time: .shortened)) · \(entry.area.title)")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
+                        if let failed = model.failedUndo, failed.id == entry.id {
+                            Text(failed.reason).font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     Spacer()
                     if entry.undoneAt != nil {

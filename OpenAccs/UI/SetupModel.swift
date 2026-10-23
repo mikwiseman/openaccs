@@ -11,6 +11,8 @@ final class SetupModel {
     private(set) var isApplying = false
     /// After Apply: one line for what was done and one per change left alone.
     private(set) var outcome: [String] = []
+    /// The last Undo that wasn't done, and why, for its row in History.
+    private(set) var failedUndo: (id: UUID, reason: String)?
 
     @ObservationIgnored private let makeContext: @MainActor () -> SetupContext
     @ObservationIgnored private let scanner: @Sendable (SetupContext) -> [AreaReport]
@@ -68,12 +70,14 @@ final class SetupModel {
         guard !isApplying else { return }
         isApplying = true
         defer { isApplying = false }
+        failedUndo = nil
         let context = makeContext()
         do {
             try await Task.detached { try SetupApplier(context: context).undo(id) }.value
             outcome = ["Undone."]
         } catch {
             outcome = [error.localizedDescription]
+            failedUndo = (id, error.localizedDescription)
         }
         await refresh()
     }
