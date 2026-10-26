@@ -9,6 +9,7 @@ final class DemoModel: PanelModel {
     var isRefreshing = false
     var notice: String?
     var launchAtLogin = true
+    var syncPins = false
     var grokBotAccounts = ["google-oauth2|user_2f8c41d7a90e"]
 
     var menuBarUsage: UsageSnapshot? { rows.first?.usage }

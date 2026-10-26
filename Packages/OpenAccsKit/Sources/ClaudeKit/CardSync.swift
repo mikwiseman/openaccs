@@ -76,7 +76,7 @@ struct SyncRecords: Sendable, Hashable {
 }
 
 /// Keeps every profile's Code-tab session list complete over the shared `~/.claude` transcripts, in
-/// every account folder of every profile, with the same pins and chat settings everywhere.
+/// every account folder of every profile, with the same chat settings everywhere (and pins, when asked).
 /// Cards are copied through an allow-list (never account-bound fields), created exclusively,
 /// edited only where no open app has them loaded after a backup, and never deleted (moved to Backups).
 public struct CardSync: Sendable {
@@ -156,8 +156,9 @@ public struct CardSync: Sendable {
     /// Claude itself never lets an "auto" title replace these.
     static let chosenTitleSources: Set<String> = ["user", "tool"]
 
-    /// What a sync would do now. Reads only; `running` = data folders of running profiles.
-    public func plan(profiles: [ClaudeProfile], running: Set<URL>) throws -> SyncPlan {
+    /// What a sync would do now. Reads only; `running` = data folders of running profiles. Without `pins`, each
+    /// window keeps its own pins and the last agreement is forgotten, so turning pin sync on later unpins nothing.
+    public func plan(profiles: [ClaudeProfile], running: Set<URL>, pins syncsPins: Bool = true) throws -> SyncPlan {
         let runningPaths = Set(running.map(\.standardizedFileURL.path))
         // Each profile's folder for the account its app shows ("current"), plus one per account signed in
         // there before: the app reads those again on that account's next sign-in, so they can be edited
@@ -213,12 +214,15 @@ public struct CardSync: Sendable {
             }
             if behind > 0 { waiting[dir] = behind }
         }
-        let pins = pinPlan(profiles: profiles, running: runningPaths, scan: scan, creating: operations)
-        operations += pins.operations
-        waiting.merge(pins.waiting, uniquingKeysWith: +)
+        var records = SyncRecords(settings: scan.state.settings, seen: scan.state.seen)
+        if syncsPins {
+            let pins = pinPlan(profiles: profiles, running: runningPaths, scan: scan, creating: operations)
+            operations += pins.operations
+            waiting.merge(pins.waiting, uniquingKeysWith: +)
+            records.pins = pins.agreed ?? scan.state.pins
+            records.pinsSeen = scan.state.pinsSeen.merging(pins.seen) { _, new in new }
+        }
         // Added to what was remembered (a chat missing from one scan keeps its history); deleted chats go.
-        var records = SyncRecords(settings: scan.state.settings, seen: scan.state.seen, pins: pins.agreed ?? scan.state.pins,
-                                  pinsSeen: scan.state.pinsSeen.merging(pins.seen) { _, new in new })
         records.settings.merge(agreement.settings) { _, new in new }
         for (dir, chats) in agreement.seen { records.seen[dir, default: [:]].merge(chats) { _, new in new } }
         for id in scan.deleted {

@@ -18,6 +18,14 @@ final class AppModel: PanelModel {
     /// First load finished (snapshot mode waits for it).
     private(set) var isReady = false
 
+    /// Off (the default): each Claude window keeps its own pinned chats. Chats and their settings sync either way.
+    var syncPins = false {
+        didSet {
+            defaults.set(syncPins, forKey: "syncPins")
+            if isReady { scheduleSync() }
+        }
+    }
+
     var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled {
         didSet {
             guard launchAtLogin != (SMAppService.mainApp.status == .enabled) else { return }
@@ -101,6 +109,7 @@ final class AppModel: PanelModel {
         grokBot = GrokBotUsage(paths: paths)
         grokCLI = GrokCLI(paths: paths)
         lastClaude = defaults.string(forKey: "lastClaude").flatMap(UUID.init)
+        syncPins = defaults.bool(forKey: "syncPins")
         Task { await start() }
     }
 
@@ -316,10 +325,10 @@ final class AppModel: PanelModel {
         // Profiles still on their old config folder join history only after a restart (migration);
         // until then they only get a preview count, never writes.
         let legacy = claudeAccounts.filter { $0.claude?.legacyConfigDir != nil }.compactMap { a in profile(a).map { (a.id, $0) } }
-        let sync = self.sync
+        let sync = self.sync, pins = syncPins
         let counting = Date()
         pending = await Task.detached {
-            let plan = try? sync.plan(profiles: profiles, running: running)
+            let plan = try? sync.plan(profiles: profiles, running: running, pins: pins)
             if let plan, !plan.isEmpty { _ = try? sync.apply(plan) }
             var counts: [UUID: Pending] = [:]
             for (account, profile) in zip(shared, profiles) {
@@ -328,7 +337,7 @@ final class AppModel: PanelModel {
             }
             let runningPaths = Set(running.map(\.standardizedFileURL.path))
             for (id, profile) in legacy where runningPaths.contains(profile.dataDir.standardizedFileURL.path) {
-                let preview = try? sync.plan(profiles: profiles + [profile], running: running)
+                let preview = try? sync.plan(profiles: profiles + [profile], running: running, pins: pins)
                 counts[id] = Pending(new: max(1, preview?.count(.create, for: profile.dataDir) ?? 1))
             }
             return counts
@@ -728,9 +737,9 @@ final class AppModel: PanelModel {
     func addClaude(label: String) async throws {
         let id = UUID()
         let dir = try claude.makeProfileDirectory(id: id)
-        // Before its first launch: the app settings, chat MCP servers and pins of the window used last.
+        // Before its first launch: the app settings and chat MCP servers of the window used last (its pins too, with pin sync).
         let source = claudeAccounts.first { $0.id == lastClaude } ?? claudeAccounts.first
-        if let source = source.flatMap(profile) { try? ClaudeAppSetup.seed(dir, from: source.dataDir) }
+        if let source = source.flatMap(profile) { try? ClaudeAppSetup.seed(dir, from: source.dataDir, pins: syncPins) }
         let account = Account(id: id, provider: .claude, label: label.isEmpty ? "Claude" : label, color: nextColor(),
                               claude: ClaudeAccountInfo(dataDir: dir.path))
         accounts.insert(account, at: (accounts.lastIndex { $0.provider == .claude }).map { $0 + 1 } ?? 0)

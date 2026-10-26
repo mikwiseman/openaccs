@@ -29,7 +29,8 @@ Every profile that OpenAccs opens uses the same `~/.claude` folder. Claude Code 
 
 The Code tab in the Claude app lists only the sessions of the account that is signed in. OpenAccs adds each session to the Code tab of your other profiles, so you can start a task on one account and continue it on another when the first account reaches its limit.
 
-- Pins, archived sessions, the permission mode, the effort, Ultracode and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
+- Archived sessions, the permission mode, the effort, Ultracode and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
+- Each window keeps its own pinned chats. To pin the same chats everywhere, turn on Settings → General → Sync pinned chats. Turning it on keeps every pin from every window.
 - Every account you have signed in to in a window gets the same list, so signing in to another account inside one window shows the same sessions too.
 - A profile that is closed shows everything the next time it opens.
 - A profile that is open reads its session list only when it starts. When you switch to it from OpenAccs and nothing is running in it, OpenAccs restarts it so it shows the latest list. While a session is working there, OpenAccs only brings it forward and shows what's waiting, like "3 new sessions, 2 changed", with a Restart link.
@@ -49,7 +50,7 @@ Settings → Setup shows what Claude and Codex share and what differs, from the 
 - **Instructions.** One file, `~/.claude/CLAUDE.md`. Codex reads it through a link at `~/.codex/AGENTS.md`, so there is nothing to keep in sync.
 - **Skills.** Stored once in `~/.agents/skills`, which Codex reads; Claude gets a link per skill in `~/.claude/skills`.
 - **MCP servers.** The same servers in Claude Code and Codex, translated between their formats field by field. Keys stay as `${VAR}` references; a key written into a file is never copied.
-- **Claude app settings.** The same app settings in every Claude window, like pins.
+- **Claude app settings.** The same app settings in every Claude window, like the sidebar mode and fast mode.
 - **Defaults.** Recommended settings for both: autonomy, keeping chats, hiding `.env` and logins from agents.
 
 Nothing changes until you review the plan and apply it. Each change goes to History with Undo, and old files go to Backups first. Logins, connectors and account skills are never copied. If ChatGPT's own Import copies Claude into Codex, the Setup tab offers to turn it off and to remove what it copied.

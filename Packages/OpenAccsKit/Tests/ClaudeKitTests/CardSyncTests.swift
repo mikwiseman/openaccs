@@ -818,6 +818,40 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(home.pinned(b) == [s.sessionId])
     }
 
+    @Test func eachWindowKeepsItsOwnPinsUntilPinSyncIsOn() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), b = home.profile("B")
+        let s1 = Session(), s2 = Session()
+        for s in [s1, s2] {
+            try home.card(a, s.card())
+            try home.card(b, s.card())
+            try home.transcript(s)
+        }
+        try home.pins(a, [s1.sessionId])
+        let configB = try home.pins(b, [s2.sessionId])
+        let bytes = try Data(contentsOf: configB)
+        let sync = cardSync(home)
+
+        // Off: no window gets another's pins, none waits for a restart over them, no agreement is kept.
+        #expect(try sync.plan(profiles: [a, b], running: [b.dataDir], pins: false).waiting(in: b.cardsDir!) == 0)
+        _ = try sync.apply(try sync.plan(profiles: [a, b], running: [], pins: false))
+        #expect(home.pinned(a) == [s1.sessionId])
+        #expect(home.pinned(b) == [s2.sessionId])
+        #expect(try Data(contentsOf: configB) == bytes)
+        #expect(home.syncState.pins == nil && home.syncState.pinsSeen.isEmpty)
+
+        // On: every window gets every window's pins, so turning it on never unpins anything.
+        _ = try sync.apply(try sync.plan(profiles: [a, b], running: [], pins: true))
+        #expect(Set(home.pinned(a)) == [s1.sessionId, s2.sessionId])
+        #expect(Set(home.pinned(b)) == [s1.sessionId, s2.sessionId])
+
+        // Off again: an unpin stays in its own window, and the old agreement is forgotten.
+        try home.pins(a, [s2.sessionId])
+        _ = try sync.apply(try sync.plan(profiles: [a, b], running: [], pins: false))
+        #expect(Set(home.pinned(b)) == [s1.sessionId, s2.sessionId])
+        #expect(home.syncState.pins == nil && home.syncState.pinsSeen.isEmpty)
+    }
+
     @Test func firstSyncKeepsEveryPinAndAnOrderChangeAloneWritesNothing() throws {
         let home = try TempHome()
         let a = home.profile("A"), b = home.profile("B")

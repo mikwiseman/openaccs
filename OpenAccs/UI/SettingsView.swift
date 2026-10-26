@@ -45,6 +45,12 @@ struct SettingsView: View {
             Section {
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.launchAtLogin = $0 }))
             }
+            Section("Claude windows") {
+                Toggle(isOn: Binding(get: { model.syncPins }, set: { model.syncPins = $0 })) {
+                    Text("Sync pinned chats")
+                    Text("Chats, modes and models always sync. Off, each window pins its own.")
+                }
+            }
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: Binding(get: { updater.automaticallyChecks }, set: { updater.automaticallyChecks = $0 }))
                     .disabled(updater.unavailable != nil)

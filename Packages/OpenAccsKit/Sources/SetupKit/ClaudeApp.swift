@@ -14,7 +14,7 @@ import OpenAccsCore
 public enum ClaudeAppSetup {
     /// The shared settings, by their place in the file. None is a consent, opt-in, gate, seen, nudge, ack, intro,
     /// onboarding or count flag: OpenAccs never agrees to anything on the user's behalf. Pins
-    /// (`starred-local-code-sessions`, `dframe-local-slice`) are not here either: ClaudeKit syncs them.
+    /// (`starred-local-code-sessions`, `dframe-local-slice`) are not here either: ClaudeKit syncs them when asked.
     static let shared: [[String]] = [
         "bypassPermissionsModeEnabled", "allowAllBrowserActions", "chicagoEnabled", "ccRemoteControlDefaultEnabled",
         "dispatchCodeTasksPermissionMode", "menuBarEnabled", "dockBounceEnabled", "ccdScheduledTasksEnabled", "sidebarMode",
@@ -105,12 +105,12 @@ public enum ClaudeAppSetup {
 
     /// Writes a brand-new profile's settings file before its first launch, with the shared settings of `source`
     /// (a profile's data folder) that belong to no account, MCP servers included. Never replaces a file.
-    public static func seed(_ dataDir: URL, from source: URL) throws {
+    public static func seed(_ dataDir: URL, from source: URL, pins: Bool = true) throws {
         guard let raw = try? Data(contentsOf: configFile(source)), let object = JSON.object(raw) else { return }
         var seeded: [String: Any] = [:]
-        // A new profile also starts with the source's pins: its chats get the same card names, and the app reads
-        // pins from here while its own storage is still empty. (Afterwards pin sync keeps them the same.)
-        for place in shared + [["preferences", "epitaxyPrefs", "starred-local-code-sessions"]] {
+        // With pin sync, a new profile also starts with the source's pins: its chats get the same card names, and
+        // the app reads pins from here while its own storage is still empty. (Afterwards pin sync keeps them the same.)
+        for place in shared + (pins ? [["preferences", "epitaxyPrefs", "starred-local-code-sessions"]] : []) {
             if let value = Self.value(at: place, in: object) { seeded = Self.setting(place[...], to: value, in: seeded) }
         }
         guard !seeded.isEmpty, let data = serialize(seeded) else { return }

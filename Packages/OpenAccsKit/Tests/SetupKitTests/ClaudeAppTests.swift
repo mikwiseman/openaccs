@@ -484,6 +484,13 @@ func value(_ object: [String: Any]?, _ place: [String]) -> NSObject? {
         #expect(value(seeded, ["preferences", "epitaxyPrefs", "starred-local-code-sessions"]) == value(home.config(hi), ["preferences", "epitaxyPrefs", "starred-local-code-sessions"]))
         #expect(value(seeded, ["mcpServers"]) == value(home.config(hi), ["mcpServers"]))
 
+        // Without pin sync, a new window starts with no pins.
+        let own = home.url.appending(path: "Profiles/own", directoryHint: .isDirectory)
+        try ClaudeAppSetup.seed(own, from: hi.dataDir, pins: false)
+        let ownConfig = try #require(home.config(ClaudeProfileRef(dataDir: own)))
+        #expect(value(ownConfig, ["preferences", "epitaxyPrefs", "starred-local-code-sessions"]) == nil)
+        #expect(value(ownConfig, ["preferences", "epitaxyPrefs", "fastMode"]) == value(seeded, ["preferences", "epitaxyPrefs", "fastMode"]))
+
         // Never over a file that is there, and nothing from a profile without one.
         let ai41 = try home.claudeProfile("ai41", account: "acct-41", config: ClaudeConfigs.ai41)
         try ClaudeAppSetup.seed(ai41.dataDir, from: hi.dataDir)

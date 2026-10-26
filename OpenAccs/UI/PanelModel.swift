@@ -13,6 +13,7 @@ protocol PanelModel: AnyObject, Observable {
     /// Something the user should know that isn't about one account (e.g. accounts.json unreadable).
     var notice: String? { get }
     var launchAtLogin: Bool { get set }
+    var syncPins: Bool { get set }
     /// Grok Bot accounts found on this Mac that are not added yet.
     var grokBotAccounts: [String] { get }
 
