@@ -6,6 +6,25 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>OpenAccs</title>
         <item>
+            <title>0.4.4</title>
+            <pubDate>Wed, 28 Oct 2026 15:04:38 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.4.4</sparkle:version>
+            <sparkle:shortVersionString>0.4.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[Claude limits are now live, with one sign-in per account.
+
+- Claude limits now come from Claude Code every 5 minutes: what's left of the 5-hour and weekly limits, when each resets, and your plan.
+- OpenAccs no longer shows the numbers the Claude app saves, because the app saves them only now and then, so they could be many hours old. A Claude row without live limits says so and has one Connect link.
+- Connect once per account. Every window of that account gets live limits from that one sign-in, including windows you add later.
+- Connect names the windows of the account and opens Anthropic's sign-in in a private window of your browser (Chrome, Brave, Edge or Firefox). Other browsers open it normally, with Copy link. Close other private windows first, because private windows share one sign-in.
+- OpenAccs checks that you signed in with that account and organization, and refuses any other.
+- The ✦ now marks every window of the account with the most left.
+- An open window's waiting count now reads "4 changes" instead of "4 chats changed", because it also counts pinned chats and app settings.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.4/OpenAccs-0.4.4.zip" length="5191456" type="application/octet-stream" sparkle:edSignature="mL3MFO9bZXEMuRXGkBx2DDF/t9gXB1hpG/UvKuFsDVO1NuubHAMWoUmeyqW1+rXZPHmj7KkRfaTrr3GzWLJwDA=="/>
+        </item>
+        <item>
             <title>0.4.3</title>
             <pubDate>Wed, 28 Oct 2026 08:38:06 +0300</pubDate>
             <link>https://github.com/mikwiseman/openaccs</link>
@@ -40,27 +59,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.2/OpenAccs-0.4.2.zip" length="4988144" type="application/octet-stream" sparkle:edSignature="ljk0AcXQ7lbn12QVuvcGOle7PWozALqJHgnjaR8QVpBFyTIslIxtVx0DT76sjTt2jGDLrmYnY7F0ztqqiWP9Cw=="/>
         </item>
-        <item>
-            <title>0.4.1</title>
-            <pubDate>Fri, 23 Oct 2026 17:19:36 +0300</pubDate>
-            <link>https://github.com/mikwiseman/openaccs</link>
-            <sparkle:version>0.4.1</sparkle:version>
-            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[Safer One setup. Apply and Undo are safe to use again.
-
-- Undo is all or nothing. It waits while the app that owns the file is open, or while a later change still needs it.
-- Each Claude default applies on its own, and keeps what Claude Code changed in the same file meanwhile.
-- MCP servers: Codex configs stay loadable when a server changes from command to URL. Keys in arguments, URLs or a tool's own fields are never copied and never shown. One server Claude refuses no longer blocks the others. A side that was reset removes nothing from the other.
-- `openaccs vps`: keys and Mac-only settings stay off the server, and what you change on the server is kept on later runs.
-- An old ~/.agents.md that other tools link to is kept. Editing a linked CLAUDE.md keeps the link. Errors show where you are looking.
-- Messages name Claude windows the way OpenAccs does.
-]]></description>
-            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.1/OpenAccs-0.4.1.zip" length="4983983" type="application/octet-stream" sparkle:edSignature="/AgKFB0rPmmHGvZ46su5dyl7adHR1X8LmM6/DkZJhq5CJuNIgnflouXkdLwy9PRhHcGdZT1V4BQH7bo8zCIrCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: CWr/YsC0WHI5Sds9M3Mkbdd5vOpdRInhZxZlYhvZ1KEQxHMVNPZHIKMCm2Fy4xYSat+RxywcnrjXDKqYJuRNDQ==
-length: 5284
+edSignature: tao6UMyZShZ0/0W+xiyxzWWZNDO4rSM3OA3PLN6SC7cDHnGuJqm6k+dpTlXJury0QIpRYWGysnuFNWU7u+rgCA==
+length: 5525
 -->
