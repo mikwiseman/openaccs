@@ -96,7 +96,6 @@ extension SetupModel {
                    attention: [Attention(id: "m1", text: "playwright differs: Claude 0.0.83, Codex 0.0.79", fixes: ["mcp.claude.playwright", "mcp.codex.playwright"])],
                    changes: [SetupChange(id: "mcp.claude.playwright", area: .mcp, title: "Use Claude's playwright", operations: [], waitsFor: .chatGPT),
                              SetupChange(id: "mcp.codex.playwright", area: .mcp, title: "Use Codex's playwright", operations: [])]),
-        AreaReport(area: .claudeApp, summary: "3 profiles · 1 differs"),
         AreaReport(area: .defaults, summary: "2 of 4 recommended · Autonomy mixed"),
         AreaReport(area: .importSync, summary: "Keep imports in sync is on · 34 copied skills",
                    attention: [Attention(id: "s1", text: "ChatGPT Import still copies Claude into Codex", fixes: ["import.off"])],

@@ -31,6 +31,8 @@ The Code tab in the Claude app lists only the sessions of the account that is si
 
 - Archived sessions, the permission mode, the effort, Ultracode and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
 - Each window keeps its own pinned chats. To pin the same chats everywhere, turn on Settings → General → Sync pinned chats. Turning it on keeps every pin from every window.
+- The Claude app's own settings are the same in every window too: its preferences, the permission mode of each folder, how new sessions start (model, effort and fast mode) and the chat MCP servers. Change one in any window and the others take it. The first time, every window takes the default window's settings and keeps the folder modes of all of them. A new window starts with them.
+- The sidebar's layout (group by, sort, show) is the one setting OpenAccs leaves alone: Claude keeps it per account on its own servers and puts it back at every launch. Set it once in each account; every window of that account then has it.
 - Every account you have signed in to in a window gets the same list, so signing in to another account inside one window shows the same sessions too.
 - A profile that is closed shows everything the next time it opens.
 - A profile that is open reads its session list only when it starts. When you switch to it from OpenAccs and nothing is running in it, OpenAccs restarts it so it shows the latest list. While a session is working there, OpenAccs only brings it forward and shows what's waiting, like "3 new sessions, 2 changed", with a Restart link.
@@ -50,7 +52,6 @@ Settings → Setup shows what Claude and Codex share and what differs, from the 
 - **Instructions.** One file, `~/.claude/CLAUDE.md`. Codex reads it through a link at `~/.codex/AGENTS.md`, so there is nothing to keep in sync.
 - **Skills.** Stored once in `~/.agents/skills`, which Codex reads; Claude gets a link per skill in `~/.claude/skills`.
 - **MCP servers.** The same servers in Claude Code and Codex, translated between their formats field by field. Keys stay as `${VAR}` references; a key written into a file is never copied.
-- **Claude app settings.** The same app settings in every Claude window, like the sidebar mode and fast mode.
 - **Defaults.** Recommended settings for both: autonomy, keeping chats, hiding `.env` and logins from agents.
 
 Nothing changes until you review the plan and apply it. Each change goes to History with Undo, and old files go to Backups first. Logins, connectors and account skills are never copied. If ChatGPT's own Import copies Claude into Codex, the Setup tab offers to turn it off and to remove what it copied.
@@ -67,7 +68,7 @@ Each account row shows how much is left of each limit and when it resets. A full
 
 | Provider | What OpenAccs shows | How you connect it |
 | --- | --- | --- |
-| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, updated every 5 minutes. | [Connect exact limits](#connect-exact-claude-limits) once per account (one sign-in in your browser). Until then OpenAccs shows the numbers the Claude app saves for each profile (`plan-usage-history.json`) with their age. The app saves them only now and then, so a 5-hour number goes once it's 5 hours old (that limit has started over since) and a weekly one after 7 days. When a session runs into a limit, Claude Code notes the exact time it comes back, and OpenAccs shows it under the account whose window ran it. |
+| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, updated every 5 minutes. | [Connect exact limits](#connect-exact-claude-limits) once per account (one sign-in in your browser). Until then OpenAccs shows the newest numbers the Claude app saved in any window of that account (`plan-usage-history.json`), with their age. The app saves them only when it refreshes its usage card, so a 5-hour number goes once it's 5 hours old (that limit has started over since) and a weekly one after 7 days. When a session runs into a limit, Claude Code notes the exact time it comes back, and OpenAccs shows it under the account whose window ran it. |
 | Codex | What's left of the 5-hour and weekly limits with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
 | Grok | What's left of the weekly limit, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
 | Kimi Code | What's left of the 5-hour, weekly and monthly limits with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |

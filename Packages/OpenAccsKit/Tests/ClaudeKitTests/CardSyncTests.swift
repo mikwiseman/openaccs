@@ -88,23 +88,9 @@ extension TempHome {
         return file
     }
 
-    /// A localStorage database like a profile's app leaves it, with one unrelated value in it.
-    fileprivate func localStorage(_ profile: ClaudeProfile) throws {
-        let dir = storageDir(profile)
-        guard !FS.exists(dir) else { return }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let edit: [UInt8] = [1] + LevelDB.varint(26) + Array("leveldb.BytewiseComparator".utf8)
-            + [2] + LevelDB.varint(3) + [3] + LevelDB.varint(4) + [4] + LevelDB.varint(7)
-        try Data(LevelDB.framed(edit, after: 0)).write(to: dir.appending(path: "MANIFEST-000001"))
-        try Data("MANIFEST-000001\n".utf8).write(to: dir.appending(path: "CURRENT"))
-        let other = LevelDB.putBatch(key: ChromiumLocalStorage.key("theme", origin: PinList.origin), value: ChromiumLocalStorage.encoded("dark"), sequence: 8)
-        try Data(LevelDB.framed(other, after: 0)).write(to: dir.appending(path: "000003.log"))
-        try Data().write(to: dir.appending(path: "LOCK"))
-    }
+    fileprivate func localStorage(_ profile: ClaudeProfile) throws { try makeLocalStorage(in: profile.dataDir) }
 
-    fileprivate func storageDir(_ profile: ClaudeProfile) -> URL {
-        profile.dataDir.appending(path: "Local Storage/leveldb", directoryHint: .isDirectory)
-    }
+    fileprivate func storageDir(_ profile: ClaudeProfile) -> URL { localStorageDir(profile.dataDir) }
 
     /// The sessionIds a profile's app shows pinned at its next launch: the newest pins in its localStorage.
     fileprivate func pinned(_ profile: ClaudeProfile) -> [String] {
@@ -112,28 +98,7 @@ extension TempHome {
         return object["value"] as? [String] ?? []
     }
 
-    /// The newest value of a localStorage key, read back from the log.
-    fileprivate func storageValue(_ profile: ClaudeProfile, _ key: String) -> String? {
-        guard let log = try? Data(contentsOf: storageDir(profile).appending(path: "000003.log")),
-              let records = LevelDB.records([UInt8](log)) else { return nil }
-        var value: String?
-        for batch in records {
-            var i = 12
-            while i < batch.count {
-                let tag = batch[i]
-                i += 1
-                guard let n = LevelDB.readVarint(batch, &i) else { return nil }
-                let k = Array(batch[i..<i + Int(n)])
-                i += Int(n)
-                guard tag == 1, let m = LevelDB.readVarint(batch, &i) else { continue }
-                if k == ChromiumLocalStorage.key(key, origin: PinList.origin) {
-                    value = String(decoding: batch[i + 1..<i + Int(m)], as: UTF8.self)
-                }
-                i += Int(m)
-            }
-        }
-        return value
-    }
+    fileprivate func storageValue(_ profile: ClaudeProfile, _ key: String) -> String? { localStorageValue(in: profile.dataDir, key) }
 
     /// Card file names in a profile's current folder (everything, including tombstones).
     fileprivate func names(_ profile: ClaudeProfile) -> [String] {
