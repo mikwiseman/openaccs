@@ -48,7 +48,7 @@ struct SetupView: View {
                 }
             }
             Section("Shared") {
-                ForEach([SetupArea.instructions, .skills, .mcp, .claudeApp], id: \.self) { area in
+                ForEach([SetupArea.instructions, .skills, .mcp], id: \.self) { area in
                     if let report = model.report(area) { AreaRow(report: report) }
                 }
                 HStack {

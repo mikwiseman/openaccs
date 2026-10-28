@@ -14,9 +14,9 @@ struct PinList {
     static let origin = "https://claude.ai"
     static let storageKey = "LSS-persisted.starred-local-code-sessions"
 
-    /// The localStorage value for these pins, as the app writes it.
-    static func storageValue(_ ids: [String], now: Date = Date()) -> String? {
-        let object: [String: Any] = ["value": ids, "tabId": "", "timestamp": Int64(now.timeIntervalSince1970 * 1000)]
+    /// A Code-tab setting's localStorage value (these pins, or another), as the app writes it.
+    static func storageValue(_ value: Any, now: Date = Date()) -> String? {
+        let object: [String: Any] = ["value": value, "tabId": "", "timestamp": Int64(now.timeIntervalSince1970 * 1000)]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]))
             .flatMap { String(data: $0, encoding: .utf8) }
     }

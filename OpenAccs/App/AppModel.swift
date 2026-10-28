@@ -455,10 +455,13 @@ final class AppModel: PanelModel {
         isRefreshing = true
         defer { isRefreshing = false }
         grokBotAccounts = grokBot.accounts().filter { bot in !accounts.contains { $0.grok?.botAccount == bot } }
+        // Every Claude window as it is now, resolved once: an account's numbers come from all of its windows.
+        let infos = claudeAccounts.compactMap { account in account.claude.map { (account.id, $0) } }, claude = self.claude
+        let windows = await Task.detached { Dictionary(infos.map { ($0.0, claude.resolve($0.1)) }) { first, _ in first } }.value
         await withTaskGroup(of: (UUID, Result<UsageSnapshot, UsageError>?).self) { group in
             for account in accounts {
                 guard force || isDue(account) else { continue }
-                group.addTask { [self] in (account.id, await self.fetchUsage(account)) }
+                group.addTask { [self] in (account.id, await self.fetchUsage(account, windows: windows)) }
             }
             for await (id, result) in group {
                 guard let result else { continue }
@@ -485,9 +488,9 @@ final class AppModel: PanelModel {
         return Date().timeIntervalSince(lastFetch[account.id] ?? .distantPast) >= interval
     }
 
-    nonisolated private func fetchUsage(_ account: Account) async -> Result<UsageSnapshot, UsageError>? {
+    nonisolated private func fetchUsage(_ account: Account, windows: [UUID: ClaudeProfile]) async -> Result<UsageSnapshot, UsageError>? {
         do {
-            return .success(try await fetchUsageThrowing(account))
+            return .success(try await fetchUsageThrowing(account, windows: windows))
         } catch let error as UsageError {
             return .failure(error)
         } catch {
@@ -495,21 +498,27 @@ final class AppModel: PanelModel {
         }
     }
 
-    nonisolated private func fetchUsageThrowing(_ account: Account) async throws -> UsageSnapshot {
+    nonisolated private func fetchUsageThrowing(_ account: Account, windows: [UUID: ClaudeProfile]) async throws -> UsageSnapshot {
         switch account.provider {
         case .claude:
             guard let info = account.claude else { throw UsageError.notConnected }
+            // The Claude app saves numbers per org, not per account: only windows showing this account and org count.
+            let mine = windows[account.id] ?? claude.resolve(info)
+            let same = [mine] + windows.values.filter { window in
+                window.dataDir.standardizedFileURL != mine.dataDir.standardizedFileURL && window.accountUuid != nil
+                    && window.accountUuid == mine.accountUuid && window.orgUuid == mine.orgUuid
+            }
             if let dir = info.cliConfigDir, !readOnly {
                 do {
                     return try await claudeCLI.usage(configDir: URL(filePath: dir, directoryHint: .isDirectory))
                 } catch UsageError.notConnected {
                     throw UsageError.needsSignIn
                 } catch {
-                    if let local = ClaudeAppUsage.read(profile: claude.resolve(info)) { return local }
+                    if let local = ClaudeAppUsage.read(profiles: same) { return local }
                     throw error
                 }
             }
-            guard let local = ClaudeAppUsage.read(profile: claude.resolve(info)) else { throw UsageError.notConnected }
+            guard let local = ClaudeAppUsage.read(profiles: same) else { throw UsageError.notConnected }
             return local
         case .codex:
             guard let info = account.codex else { throw UsageError.notConnected }
@@ -737,9 +746,11 @@ final class AppModel: PanelModel {
     func addClaude(label: String) async throws {
         let id = UUID()
         let dir = try claude.makeProfileDirectory(id: id)
-        // Before its first launch: the app settings and chat MCP servers of the window used last (its pins too, with pin sync).
-        let source = claudeAccounts.first { $0.id == lastClaude } ?? claudeAccounts.first
-        if let source = source.flatMap(profile) { try? ClaudeAppSetup.seed(dir, from: source.dataDir, pins: syncPins) }
+        // Before its first launch: the app settings and chat MCP servers of the default window, which the first sync
+        // takes them from, else the window used last (its pins too, with pin sync). Its account's own settings follow
+        // once it is signed in, at its first restart.
+        let source = claudeAccounts.first { profile($0)?.isDefault == true } ?? claudeAccounts.first { $0.id == lastClaude } ?? claudeAccounts.first
+        if let source = source.flatMap(profile) { try? AppSettings.seed(dir, from: source.dataDir, pins: syncPins) }
         let account = Account(id: id, provider: .claude, label: label.isEmpty ? "Claude" : label, color: nextColor(),
                               claude: ClaudeAccountInfo(dataDir: dir.path))
         accounts.insert(account, at: (accounts.lastIndex { $0.provider == .claude }).map { $0 + 1 } ?? 0)

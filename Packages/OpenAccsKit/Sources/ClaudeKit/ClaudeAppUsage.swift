@@ -6,9 +6,9 @@ import OpenAccsCore
 public enum ClaudeAppUsage {
     /// `UsageSnapshot.source` of these numbers.
     public static let source = "Claude app"
-    /// The app writes its numbers only now and then (at launch and quit), so they are often hours old. A
-    /// window's number holds until that window could have started over (5 hours, 7 days); then it's dropped.
-    /// nil when nothing is left.
+    /// The app writes its numbers only when it refreshes its usage card (never more often than every 4.5
+    /// minutes) and a closed window not at all, so they can be hours old. A window's number holds until that
+    /// window could have started over (5 hours, 7 days); then it's dropped. nil when nothing is left.
     public static func current(_ usage: UsageSnapshot, now: Date) -> UsageSnapshot? {
         let age = now.timeIntervalSince(usage.asOf)
         var result = usage
@@ -22,9 +22,12 @@ public enum ClaudeAppUsage {
         return result.windows.isEmpty ? nil : result
     }
 
-    public static func read(profile: ClaudeProfile) -> UsageSnapshot? {
-        guard let data = try? Data(contentsOf: profile.dataDir.appending(path: "plan-usage-history.json")) else { return nil }
-        return parse(data, org: profile.orgUuid)
+    /// The newest numbers any of these windows saved, each read for the org it shows. Pass every window signed
+    /// in to one account and org: they save that account's numbers, and one closed long ago keeps old ones.
+    public static func read(profiles: [ClaudeProfile]) -> UsageSnapshot? {
+        profiles.compactMap { profile in
+            (try? Data(contentsOf: profile.dataDir.appending(path: "plan-usage-history.json"))).flatMap { parse($0, org: profile.orgUuid) }
+        }.max { $0.asOf < $1.asOf }
     }
 
     /// Latest sample, preferring the profile's org: fh → 5h, sd → weekly, so/sn → weekly Opus/Sonnet.

@@ -167,10 +167,11 @@ import Testing
         #expect((MCPSetup.readClaude(context)?.servers["eye"] as? [String: Any])?["command"] as? String == "/opt/eye")
     }
 
-    @Test func aggregatorReportsAllSixAreasWithoutApplying() throws {
+    @Test func aggregatorReportsEveryAreaWithoutApplying() throws {
         let home = try SetupHome()
         let reports = OneSetup.scan(home.context())
-        #expect(Set(reports.map(\.area)) == Set(SetupArea.allCases))
+        // The Claude app's settings stay the same through the Claude sync, not through Apply.
+        #expect(Set(reports.map(\.area)) == Set(SetupArea.allCases).subtracting([.claudeApp]))
         #expect(home.read(".claude/settings.json") == nil)
         #expect(home.read(".codex/config.toml") == nil)
     }

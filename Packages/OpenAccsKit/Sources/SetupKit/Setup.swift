@@ -11,6 +11,7 @@ import OpenAccsCore
 /// - Logins, tokens, keys written into files, account-bound data and machine state are never copied.
 /// - A file a running app keeps in memory is written only while that app is closed (`waitsFor`).
 public enum SetupArea: String, CaseIterable, Codable, Sendable, Hashable {
+    /// `claudeApp` is scanned no more (the Claude sync keeps those settings the same); History may still hold its changes.
     case instructions, skills, mcp, claudeApp, defaults, importSync
 
     public var title: String {

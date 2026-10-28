@@ -27,6 +27,14 @@ final class SetupHome: @unchecked Sendable {
     func context(running: Set<SetupApp> = [], run: @escaping @Sendable ([String]) -> (status: Int32, output: String)? = { _ in (0, "") }) -> SetupContext {
         SetupContext(home: url, claudeProfiles: [], isRunning: { running.contains($0) }, run: run)
     }
+
+    /// Every file, folder and link under the home, with what it holds.
+    func snapshot() -> [String: FileState] {
+        var all: [String: FileState] = [:]
+        let items = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        for item in items { all[item.path] = FileState.of(item) }
+        return all
+    }
 }
 
 final class Calls: @unchecked Sendable {

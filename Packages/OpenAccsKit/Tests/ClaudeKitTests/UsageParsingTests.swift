@@ -44,9 +44,29 @@ private func iso(_ string: String) -> Date {
     @Test func readsTheProfilesHistoryFile() throws {
         let home = try TempHome()
         let profile = ClaudeProfile(dataDir: home.url.appending(path: "Data", directoryHint: .isDirectory), isDefault: false, accountUuid: "a", orgUuid: orgA)
-        #expect(ClaudeAppUsage.read(profile: profile) == nil)
+        #expect(ClaudeAppUsage.read(profiles: [profile]) == nil)
         try home.write("Data/plan-usage-history.json", #"{"version":2,"samples":[{"t":1760960000000,"org":"\#(orgA)","u":{"fh":7,"sd":8}}]}"#)
-        #expect(ClaudeAppUsage.read(profile: profile)?.window(.weekly)?.usedPercent == 8)
+        #expect(ClaudeAppUsage.read(profiles: [profile])?.window(.weekly)?.usedPercent == 8)
+        #expect(ClaudeAppUsage.read(profiles: []) == nil)
+    }
+
+    @Test func anAccountsNewestNumbersComeFromWhicheverOfItsWindowsSavedThemLast() throws {
+        let home = try TempHome()
+        // One account in two windows: one closed this morning, the other open and saving its numbers.
+        let closed = ClaudeProfile(dataDir: home.url.appending(path: "Closed", directoryHint: .isDirectory), isDefault: false, accountUuid: "a", orgUuid: orgA)
+        let open = ClaudeProfile(dataDir: home.url.appending(path: "Open", directoryHint: .isDirectory), isDefault: true, accountUuid: "a", orgUuid: orgA)
+        try home.write("Closed/plan-usage-history.json", #"{"version":2,"samples":[{"t":1760960000000,"org":"\#(orgA)","u":{"fh":0,"sd":0}}]}"#)
+        try home.write("Open/plan-usage-history.json", """
+            {"version":2,"samples":[{"t":1760990000000,"org":"\(orgA)","u":{"fh":100,"sd":24}},{"t":1760995000000,"org":"\(orgB)","u":{"fh":5,"sd":5}}]}
+            """)
+
+        for order in [[closed, open], [open, closed]] {
+            let usage = try #require(ClaudeAppUsage.read(profiles: order))
+            #expect(usage.asOf == Date(timeIntervalSince1970: 1_760_990_000))
+            #expect(usage.windows == [UsageWindow(kind: .fiveHour, usedPercent: 100), UsageWindow(kind: .weekly, usedPercent: 24)])
+        }
+        // Another org's newer sample in the same file is never this account's.
+        #expect(ClaudeAppUsage.read(profiles: [closed])?.window(.weekly)?.usedPercent == 0)
     }
 
     @Test func numbersOnlyLastAsLongAsTheirWindow() {

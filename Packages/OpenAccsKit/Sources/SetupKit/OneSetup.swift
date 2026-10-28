@@ -19,7 +19,6 @@ public enum OneSetup {
             InstructionsSetup.scan(context),
             skills,
             MCPSetup.scan(context),
-            ClaudeAppSetup.scan(context),
             DefaultsSetup.scan(context),
             imports,
         ]
