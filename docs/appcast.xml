@@ -6,6 +6,25 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>OpenAccs</title>
         <item>
+            <title>0.4.3</title>
+            <pubDate>Wed, 28 Oct 2026 08:38:06 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.4.3</sparkle:version>
+            <sparkle:shortVersionString>0.4.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[OpenAccs now keeps the Claude app's settings the same in every Claude window, and windows of one account show the same limits.
+
+- Windows signed in to the same account show the newest limits that any of them saved. The Claude app saves these numbers only from time to time, so for live limits with reset times, connect exact limits once per account.
+- The Claude app's own settings are the same in every window: its preferences, the permission mode of each folder, how new sessions start (model, effort and fast mode) and the chat MCP servers. When you change one in any window, OpenAccs copies it to the others.
+- The first time, OpenAccs gives every window the settings of your default Claude window and keeps the folder modes set in any of them. When you add a window, it gets the same settings.
+- OpenAccs can change a window's settings only while that window is closed, so an open window gets them when you restart it.
+- OpenAccs leaves the sidebar layout (group by, sort, show) alone, because Claude keeps it per account on its own servers and puts it back at every launch. Set it once in each account.
+- When you sign in to a different account in a window, OpenAccs shows the window under that account right away and copies your chats to it.
+- Setup no longer has a Claude app area, because OpenAccs now keeps those settings the same on its own.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.3/OpenAccs-0.4.3.zip" length="5070058" type="application/octet-stream" sparkle:edSignature="ugt2WkPMuy6GlRL/rKe1k9mRpVh5xnZoYfulr7jGEQelVSnBHPQciiD//wGHatkDQnb9BRudaaZ8GsMCp7kfCQ=="/>
+        </item>
+        <item>
             <title>0.4.2</title>
             <pubDate>Mon, 26 Oct 2026 16:48:54 +0300</pubDate>
             <link>https://github.com/mikwiseman/openaccs</link>
@@ -39,30 +58,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.1/OpenAccs-0.4.1.zip" length="4983983" type="application/octet-stream" sparkle:edSignature="/AgKFB0rPmmHGvZ46su5dyl7adHR1X8LmM6/DkZJhq5CJuNIgnflouXkdLwy9PRhHcGdZT1V4BQH7bo8zCIrCA=="/>
         </item>
-        <item>
-            <title>0.4.0</title>
-            <pubDate>Fri, 23 Oct 2026 12:44:04 +0300</pubDate>
-            <link>https://github.com/mikwiseman/openaccs</link>
-            <sparkle:version>0.4.0</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[One setup for Claude and Codex.
-
-- Settings → Setup shows instructions, skills, MCP servers, Claude app settings, defaults and ChatGPT Import in one place.
-- Review every change before applying. Backups, History and Undo are built in; files owned by an open app wait until it closes.
-- Share instructions and skills through links. Translate MCP servers between Claude and Codex, with an explicit choice when both sides differ.
-- Keep Claude chats, set autonomy, and clean up copied Import skills without rewriting their contents.
-- Edit your instructions, browse the gallery, or use the short writing wizard. Adopted rules are reviewed before saving.
-- New Claude windows start with your app settings and pins.
-- Use `openaccs setup` from the terminal and `openaccs vps user@host` to prepare a server. Each tool signs in there separately.
-
-Installing this update does not apply the Setup plan. Open Settings → Setup to review it.
-]]></description>
-            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.0/OpenAccs-0.4.0.zip" length="4892761" type="application/octet-stream" sparkle:edSignature="/eHnpiZUq4FoC2pk1xVmQH6W/TRIGU38cU/4GzYirHvCmb01m+CCCPrJOpJAZYJsVVNS0DU30isAJ9EjSQnlDw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: dyTh6zUykVfhC2+w406+bi7TSrCYmH4q4WrH+WGoulxTDkuMoiJp6wBR57afXezU6m20Ut9a/BW6v/GyhbRkCw==
-length: 4865
+edSignature: CWr/YsC0WHI5Sds9M3Mkbdd5vOpdRInhZxZlYhvZ1KEQxHMVNPZHIKMCm2Fy4xYSat+RxywcnrjXDKqYJuRNDQ==
+length: 5284
 -->
