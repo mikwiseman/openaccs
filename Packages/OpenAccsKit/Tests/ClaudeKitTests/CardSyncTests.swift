@@ -941,6 +941,40 @@ private func sync(_ home: TempHome, _ profiles: [ClaudeProfile], running: [(Clau
         #expect(sync.cache.cards.allSatisfy { Set($0.object.keys).isSubset(of: Card.fields) })
     }
 
+    @Test func firstLoginToAnotherAccountSyncsItsMissingFolderAndOffersRestart() throws {
+        let home = try TempHome()
+        let a = home.profile("A"), old = home.profile("B"), session = Session()
+        let nextAccount = "55555555-5555-4555-8555-555555555555"
+        let next = ClaudeProfile(dataDir: old.dataDir, isDefault: false, accountUuid: nextAccount, orgUuid: org)
+        try home.card(a, session.card())
+        try home.card(old, session.card())
+        try home.transcript(session)
+        try home.write("Library/Logs/Claude/main.log", """
+            Loaded 1 persisted sessions from \(old.cardsDir!.path)
+            [LocalSessionManager] Session storage directory does not exist yet, skipping load: \(next.cardsDir!.path)
+            Loaded 0 persisted sessions from \(old.dataDir.path)/local-agent-mode-sessions/\(account)/\(org)
+
+            """)
+        let launched = Date().addingTimeInterval(-3600)
+        let profiles = ClaudeProfiles(paths: home.paths) {
+            [ClaudeProcess(pid: 10, arguments: ["/Applications/Claude.app/Contents/MacOS/Claude",
+                                               "--user-data-dir=\(old.dataDir.path)"], launchDate: launched)]
+        }
+        let shown = profiles.resolve(ClaudeAccountInfo(dataDir: old.dataDir.path, accountUuid: account))
+        #expect(shown.accountUuid == nextAccount)
+        #expect(shown.isConfirmed)
+        #expect(profiles.loggedAccount(ClaudeAccountInfo(dataDir: old.dataDir.path)) == nextAccount)
+
+        let sync = CardSync(claude: profiles)
+        let plan = try sync.plan(profiles: [a, shown], running: [old.dataDir])
+        #expect(plan.count(.create, for: old.dataDir) == 1)
+        #expect(try sync.apply(plan).created == 1)
+        #expect(FS.isRegularFile(home.cardFile(next, session)))
+        #expect(sync.pendingCount(for: shown, among: [a, shown]) == 1)
+        #expect(cardSync(home, running: [(next, Date().addingTimeInterval(3600))])
+            .pendingCount(for: next, among: [a, next]) == 0)
+    }
+
     @Test func pendingCountIsWhatARunningProfileHasNotLoaded() throws {
         let home = try TempHome()
         let a = home.profile("A"), b = home.profile("B")

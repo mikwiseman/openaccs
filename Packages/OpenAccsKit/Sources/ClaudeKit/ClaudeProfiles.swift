@@ -140,14 +140,16 @@ public struct ClaudeProfiles: Sendable {
         return result
     }
 
-    /// `<acct>/<org>` of the latest `Loaded N persisted sessions from <dataDir>/claude-code-sessions/<acct>/<org>`
-    /// line, newest log first, reading only the last 4 MB of each.
+    /// `<acct>/<org>` of the latest session load, including a first login whose folder doesn't exist yet.
+    /// Newest log first, reading only the last 4 MB of each.
     func loggedFolder(dataDir: URL) -> (account: String, org: String)? {
-        let marker = Data("persisted sessions from \(dataDir.path)/claude-code-sessions/".utf8)
+        let markers = ["persisted sessions from ", "Session storage directory does not exist yet, skipping load: "]
+            .map { Data("\($0)\(dataDir.path)/claude-code-sessions/".utf8) }
         let ends: Set<UInt8> = [0x2F, 0x20, 0x0A, 0x0D, 0x09]  // / space \n \r \t
         for name in ["main.log", "main1.log", "main2.log"] {
             guard let text = Self.tail(of: paths.claudeLogsDir.appending(path: name), bytes: 4 << 20),
-                  let hit = text.range(of: marker, options: .backwards) else { continue }
+                  let hit = markers.compactMap({ text.range(of: $0, options: .backwards) })
+                    .max(by: { $0.lowerBound < $1.lowerBound }) else { continue }
             let account = text[hit.upperBound...].prefix { !ends.contains($0) }
             guard text[account.endIndex...].first == 0x2F else { continue }
             let org = text[(account.endIndex + 1)...].prefix { !ends.contains($0) }
