@@ -68,7 +68,7 @@ Each account row shows how much is left of each limit and when it resets. A full
 
 | Provider | What OpenAccs shows | How you connect it |
 | --- | --- | --- |
-| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, updated every 5 minutes. | [Connect exact limits](#connect-exact-claude-limits) once per account (one sign-in in your browser). Until then OpenAccs shows the newest numbers the Claude app saved in any window of that account (`plan-usage-history.json`), with their age. The app saves them only when it refreshes its usage card, so a 5-hour number goes once it's 5 hours old (that limit has started over since) and a weekly one after 7 days. When a session runs into a limit, Claude Code notes the exact time it comes back, and OpenAccs shows it under the account whose window ran it. |
+| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, live from Claude Code every 5 minutes. | [Connect live limits](#connect-live-claude-limits) once per account. One Claude Code sign-in covers every window of that account, including windows you add later. Until then the row says "No live limits" and shows no numbers. When a session runs into a limit, Claude Code notes the exact time it comes back, and OpenAccs shows it under that account's windows. |
 | Codex | What's left of the 5-hour and weekly limits with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
 | Grok | What's left of the weekly limit, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
 | Kimi Code | What's left of the 5-hour, weekly and monthly limits with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |
@@ -78,7 +78,7 @@ OpenAccs reads local files every minute and asks providers and CLIs every 5 to 1
 
 ## Privacy and safety
 
-- **Claude.** OpenAccs never reads, stores or copies Claude credentials. To open an account, OpenAccs starts the Claude app with `--user-data-dir` set to that profile's folder, and you sign in inside Claude. It never opens Claude's `config.json`, where Claude keeps its encrypted login. For exact limits, OpenAccs runs Anthropic's own unmodified `claude` CLI, which signs in through Anthropic's browser page and keeps its own login. OpenAccs only reads the CLI's answer about usage.
+- **Claude.** OpenAccs never reads, stores or copies Claude credentials. To open an account, OpenAccs starts the Claude app with `--user-data-dir` set to that profile's folder, and you sign in inside Claude. It never opens Claude's `config.json`, where Claude keeps its encrypted login. For live limits, OpenAccs runs Anthropic's own unmodified `claude` CLI, which signs in through Anthropic's browser page and keeps its own login in a folder of its own. OpenAccs only reads the CLI's answer about usage, and the account and organization in that folder's `.claude.json`, to know whose numbers they are.
 - **Codex.** OpenAccs keeps each saved Codex sign-in in the macOS Keychain, never in a plain file. The active sign-in stays in `~/.codex/auth.json`, where Codex keeps it anyway. OpenAccs renews the tokens of saved accounts that aren't active through OpenAI's own sign-in server, and it leaves the active sign-in to Codex.
 - **API keys.** OpenAccs keeps Kimi and Z.ai keys in the macOS Keychain. It checks each key with the provider before it saves it, so a mistyped key never becomes an account.
 - **Network.** OpenAccs has no analytics and no telemetry. Once a day it checks for updates at `mikwiseman.github.io` (a feed signed with the OpenAccs key; turn this off in Settings), and every update asks before it installs. While the Instructions window is open, it loads the gallery from `mikwiseman.github.io` and the files in it from `raw.githubusercontent.com`. Otherwise it talks only to `chatgpt.com` and `auth.openai.com` for Codex, `api.kimi.com` or `api.kimi.ai` for Kimi, and `api.z.ai` or `open.bigmodel.cn` for Z.ai. The Claude and Grok CLIs talk to their own servers themselves.
@@ -95,7 +95,7 @@ OpenAccs keeps its own data in `~/Library/Application Support/OpenAccs/`. The fi
 - macOS 26 (Tahoe) or later, on Apple silicon or Intel.
 - The Claude desktop app in `/Applications`, for Claude accounts.
 - The ChatGPT desktop app with Codex in `/Applications`, for Codex accounts.
-- Claude Code, if you want exact Claude limits. OpenAccs uses `~/.local/bin/claude`, or the copy of Claude Code that the Claude app downloads.
+- Claude Code, for live Claude limits. OpenAccs uses `~/.local/bin/claude`, or the copy of Claude Code that the Claude app downloads.
 - The Grok Bot app or the Grok CLI, if you want Grok limits.
 
 ### Download
@@ -175,16 +175,15 @@ Close any `codex` sessions in Terminal before you switch, because they keep the 
 
 <p align="center"><img src="docs/images/add-codex.png" width="340" alt="The Add Codex view in dark mode, with sign-in tips and a Sign in with ChatGPT button."></p>
 
-### Connect exact Claude limits
+### Connect live Claude limits
 
-1. Click Connect exact limits under a Claude account, or right-click it and choose Connect Exact Limits.
-2. Your browser opens Anthropic's sign-in page for Claude Code. Sign in with the same account as that profile.
+1. Click Connect under a Claude account that says "No live limits".
+2. OpenAccs names the windows that use that account. Click Sign in.
+3. Anthropic's sign-in page for Claude Code opens in a private window of your browser (Chrome, Brave, Edge or Firefox). Sign in there with that account.
 
-claude.ai completes this sign-in for whichever account is signed in to claude.ai in that browser. If that's another account, claude.ai says "Unable to access Claude Code". Then click Copy link under the account in OpenAccs, open the link in a private window, and sign in there with the right account.
+Private windows share one sign-in, so close any other private windows first and connect one account at a time. Safari and other browsers open the page in a normal window. If claude.ai there says "Unable to access Claude Code", it's signed in to another account. Click Copy link and open the link in a private window.
 
-OpenAccs checks that Claude Code signed in to the same account as the profile, and it refuses to show another account's limits under it. From then on, the row shows reset times and your plan.
-
-When the Claude app's own numbers say a limit is empty, they can't say when it comes back. The row then says "Back time unknown" and offers Connect exact limits.
+OpenAccs checks the account and the organization that Claude Code signed in to, and it refuses to show another account's limits. Every window of that account then shows live limits with reset times and your plan, including windows you add later. If Claude Code later says the sign-in ended, or doesn't answer for 30 minutes, the row says so and offers Connect again.
 
 ### Add a Kimi Code or Z.ai key
 
@@ -218,7 +217,7 @@ openaccs status --json      # the same data for scripts
 | `openaccs use --best <provider> [--yes]` | The same, for the account with the most left. |
 | `openaccs restart <account>` | Restart a Claude profile so it loads new sessions. |
 | `openaccs refresh [--json]` | Ask every provider now, then show the status. |
-| `openaccs connect <account>` | Connect exact Claude limits (Claude Code sign-in in the browser). |
+| `openaccs connect <account>` | Connect live Claude limits for that account and all its windows (one Claude Code sign-in in the browser). |
 | `openaccs add claude <name>` | Add a Claude profile. Also `add codex`, `add grok`, `add grok-bot`, and `add kimi` or `add zai` with a key (`-` or no key reads it from stdin, out of your shell history; `--china` for China accounts). |
 | `openaccs rename <account> <new name>` and `openaccs remove <account> [--yes]` | Rename or remove an account. |
 
@@ -256,7 +255,7 @@ No. Codex keeps local history in `~/.codex` for all accounts, and OpenAccs only 
 
 ### How do I see when my Claude 5-hour limit resets?
 
-Click Connect exact limits on the Claude account (or right-click it and choose Connect Exact Limits). After you sign in to Claude Code once, OpenAccs shows your live limits and when they reset, every 5 minutes. Without that step, it shows the Claude app's percentages with their age, and the time a limit comes back once a session runs into it.
+Click Connect on the Claude account and sign in to Claude Code once. OpenAccs then shows your live limits and when they reset, every 5 minutes, in every window of that account. Until then the row says "No live limits", and it shows when a limit comes back only after a session runs into it.
 
 ### How do I check my Claude and Codex limits from the terminal?
 
@@ -309,7 +308,7 @@ Yes. OpenAccs is free and open source under the MIT license.
 - Claude sign-in links (Google, SSO and the email link) and notification clicks go to the Claude window that opened first. Use Continue with email and the code when another Claude window is open.
 - Every Claude window has the same icon in the Dock and in the app switcher. Use OpenAccs to pick the right one.
 - Each Claude profile downloads its own Cowork virtual machine of about 12 GB.
-- Without exact limits, Claude numbers come from the Claude app, which saves them only now and then and without reset times. OpenAccs shows them with their age, and a reset time only after a session runs into that limit.
+- Claude limits need one Claude Code sign-in per account. Until then the row shows no numbers, only the time a limit comes back once a session runs into it. OpenAccs doesn't show the numbers the Claude app saves, because the app saves them only now and then, so they can be hours old.
 - A Codex switch quits and reopens the ChatGPT app. OpenAccs won't switch while a `codex` session runs in Terminal, because that session would keep the old account.
 - OpenAccs switches only Codex sign-ins stored in `~/.codex/auth.json`. It won't switch when Codex keeps its sign-in in the keychain (`cli_auth_credentials_store` in `~/.codex/config.toml`) or in `~/.codex/secrets`.
 - The Grok CLI option relies on an undocumented billing call, so it is experimental.

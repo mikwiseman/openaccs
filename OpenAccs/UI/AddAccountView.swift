@@ -2,8 +2,11 @@ import SwiftUI
 import OpenAccsCore
 
 /// Adds one account, inside the panel. Each provider gets a few lines of guidance and one action.
+/// Also connects a Claude account's live limits, guided the same way.
 struct AddAccountView: View {
     let provider: Provider
+    /// Claude: the window whose account gets live limits, instead of adding an account.
+    var connecting: UUID? = nil
     let model: any PanelModel
     let done: () -> Void
 
@@ -13,6 +16,7 @@ struct AddAccountView: View {
     @State private var task: Task<Void, Never>?
     @State private var waiting: String?
     @State private var failure: String?
+    @State private var browser = Browser.current
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -29,6 +33,13 @@ struct AddAccountView: View {
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 18)
+        // The window was removed (say from the terminal) while its sign-in ran: the sign-in ends with it.
+        .onChange(of: connecting.map { id in model.rows.contains { $0.id == id } }) { _, present in
+            if present == false {
+                task?.cancel()
+                done()
+            }
+        }
     }
 
     private var header: some View {
@@ -47,12 +58,48 @@ struct AddAccountView: View {
             .padding(.leading, -9)
             .keyboardShortcut(.cancelAction)
             .accessibilityLabel("Back")
-            Text("Add \(provider.displayName)")
+            Text(connecting == nil ? "Add \(provider.displayName)" : "Connect live limits")
                 .font(.system(size: 15, weight: .semibold))
         }
     }
 
     @ViewBuilder private var content: some View {
+        if let connecting {
+            connect(connecting)
+        } else {
+            add
+        }
+    }
+
+    /// Names the account by its windows (no email is known before the first sign-in), opens Anthropic's
+    /// sign-in privately when the browser can, and waits for it.
+    @ViewBuilder private func connect(_ id: UUID) -> some View {
+        let row = model.rows.first { $0.id == id }
+        let windows = model.rows.filter { $0.provider == .claude && $0.limitsGroup != nil && $0.limitsGroup == row?.limitsGroup }.map(\.label)
+        let names = Text(windowList(windows.isEmpty ? [row?.label ?? "this window"] : windows)).bold()
+        let browserName = Text(browser?.name ?? "Your browser").bold()
+        hints {
+            Hint("person.crop.circle", Text("Sign in with the account you use in \(names). One sign-in covers every window on that account."))
+            if browser?.privateFlag != nil {
+                Hint("eye.slash", Text("\(browserName) opens it in a private window. Close any other private windows first, because private windows share one sign-in."))
+            } else {
+                Hint("safari", Text("\(browserName) opens it. If claude.ai there is signed in to another account, open the link in a private window instead."))
+            }
+            Hint("lock", "Claude Code keeps this sign-in itself. OpenAccs only asks it what's left.")
+        }
+        VStack(alignment: .leading, spacing: 10) {
+            action("Sign in", waiting: "Waiting for the browser…") { try await model.connectExactLimits(id) }
+            if waiting != nil, let link = row?.signInLink {
+                HStack(spacing: 0) {
+                    CopyLinkButton(link: link)
+                    Text(" to open it in another window").foregroundStyle(.secondary)
+                }
+                .font(.system(size: 11.5))
+            }
+        }
+    }
+
+    @ViewBuilder private var add: some View {
         switch provider {
         case .claude:
             field("Name", text: $label, prompt: "Work")
@@ -203,14 +250,15 @@ struct AddAccountView: View {
         }
     }
 
-    /// Runs `work`; `text` (if any) replaces the button while it runs. Success returns to the list.
+    /// Runs `work`; `text` (if any) replaces the button while it runs. Success returns to the list, also when
+    /// Cancel came too late to stop it.
     private func start(_ text: String?, _ work: @escaping @MainActor () async throws -> Void) {
         failure = nil
         waiting = text
         task = Task {
             do {
                 try await work()
-                if !Task.isCancelled { done() }
+                done()
             } catch {
                 if !Task.isCancelled, !(error is CancellationError) { failure = error.localizedDescription }
             }
@@ -222,9 +270,15 @@ struct AddAccountView: View {
 /// One line of guidance with a symbol.
 private struct Hint: View {
     let symbol: String
-    let text: LocalizedStringKey
+    let text: Text
 
     init(_ symbol: String, _ text: LocalizedStringKey) {
+        self.symbol = symbol
+        self.text = Text(text)
+    }
+
+    /// Built from parts, so a window's name stays plain text whatever characters it has.
+    init(_ symbol: String, _ text: Text) {
         self.symbol = symbol
         self.text = text
     }
@@ -235,7 +289,7 @@ private struct Hint: View {
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
-            Text(text)
+            text
                 .font(.system(size: 12))
                 .foregroundStyle(.primary.opacity(0.85))
                 .tint(.accentColor)

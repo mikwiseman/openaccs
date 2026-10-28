@@ -47,6 +47,60 @@ import Testing
         #expect(!profile.isDefault)
     }
 
+    @Test func anOlderLogNeverOverrulesTheUnreadPartOfANewerOne() throws {
+        let home = try TempHome()
+        let data = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
+        // main.log named this window's folder before the part OpenAccs reads; main1.log is older still.
+        try home.write("Library/Logs/Claude/main.log", "Loaded 1 persisted sessions from \(data.path)/claude-code-sessions/\(acct)/\(orgA)\n"
+                       + String(repeating: "x", count: 4 << 20) + "\n")
+        try home.write("Library/Logs/Claude/main1.log", "Loaded 1 persisted sessions from \(data.path)/claude-code-sessions/\(acct2)/\(orgB)\n")
+        try home.write("Profiles/p/Data/claude-code-sessions/\(acct)/\(orgA)/local_a.json", "{}")
+        let profiles = ClaudeProfiles(paths: home.paths, processes: { [] })
+        let info = ClaudeAccountInfo(dataDir: data.path, accountUuid: acct)
+
+        // What main.log's unread start said is newer than anything in main1.log: fall back to the stored account.
+        let profile = profiles.resolve(info)
+        #expect(profile.accountUuid == acct && profile.orgUuid == orgA && !profile.isConfirmed)
+
+        // A newer log read whole that doesn't name the folder lets an older one speak.
+        try home.write("Library/Logs/Claude/main.log", "Loaded 1 persisted sessions from /elsewhere/claude-code-sessions/\(acct)/\(orgA)\n")
+        let older = profiles.resolve(info)
+        #expect(older.accountUuid == acct2 && older.orgUuid == orgB && older.isConfirmed)
+    }
+
+    @Test func anAccountInTwoOrgsGivesNoLimitsKeyWithoutTheLog() throws {
+        let home = try TempHome()
+        let data = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
+        try home.write("Profiles/p/Data/claude-code-sessions/\(acct)/\(orgA)/local_a.json", "{}")
+        let profiles = ClaudeProfiles(paths: home.paths, processes: { [] })
+        let info = ClaudeAccountInfo(dataDir: data.path, accountUuid: acct)
+        #expect(profiles.resolve(info).limitsAccount(addedAs: acct) == ClaudeAccountKey(account: acct, org: orgA))
+        // Card sync fills every folder of a window, so with two orgs the newest card can't tell which one it uses.
+        try home.write("Profiles/p/Data/claude-code-sessions/\(acct)/\(orgB)/local_a.json", "{}")
+        #expect(profiles.resolve(info).limitsAccount(addedAs: acct) == nil)
+        // Claude's log names it again: no guess.
+        try home.write("Library/Logs/Claude/main.log", "Loaded 1 persisted sessions from \(data.path)/claude-code-sessions/\(acct)/\(orgB)\n")
+        #expect(profiles.resolve(info).limitsAccount(addedAs: acct) == ClaudeAccountKey(account: acct, org: orgB))
+    }
+
+    @Test func limitsFollowWhatClaudeNamesOrTheAccountTheWindowWasAddedWith() throws {
+        let data = URL(filePath: "/tmp/p/Data", directoryHint: .isDirectory)
+        func window(_ account: String?, _ org: String?, confirmed: Bool) -> ClaudeProfile {
+            ClaudeProfile(dataDir: data, isDefault: false, accountUuid: account, orgUuid: org, isConfirmed: confirmed)
+        }
+        let key = try #require(ClaudeAccountKey(account: acct, org: orgA))
+        #expect(key.description == "\(acct)/\(orgA)")
+        #expect(window(acct, orgA, confirmed: true).limitsAccount(addedAs: nil) == key)
+        #expect(window(acct, orgA, confirmed: false).limitsAccount(addedAs: acct.uppercased()) == key)
+        #expect(window(acct.uppercased(), orgA.uppercased(), confirmed: true).limitsAccount(addedAs: nil) == key)
+        // A guess at another account's newest card never decides whose limits a window shows.
+        #expect(window(acct2, orgB, confirmed: false).limitsAccount(addedAs: acct) == nil)
+        #expect(window(acct, orgA, confirmed: false).limitsAccount(addedAs: nil) == nil)
+        #expect(window(acct, nil, confirmed: false).limitsAccount(addedAs: acct) == nil)
+        #expect(ClaudeAccountKey(account: "../x", org: orgA) == nil)
+        #expect(ClaudeAccountKey(account: acct, org: nil) == nil)
+    }
+
     @Test func fallsBackToTheFolderWithTheNewestCard() throws {
         let home = try TempHome()
         let data = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)

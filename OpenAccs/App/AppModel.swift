@@ -70,8 +70,16 @@ final class AppModel: PanelModel {
     private var shownAccount: [UUID: String] = [:]
     /// The link of a Claude Code sign-in in progress, to open in another browser window.
     private var signInLinks: [UUID: URL] = [:]
+    /// The window a Claude Code sign-in runs for. One at a time: a browser's private windows share one session.
+    private var signingIn: UUID?
+    /// The stored Claude Code folder that serves each account and org a window shows (found on every refresh).
+    private var signIns: [ClaudeAccountKey: String] = [:]
+    /// Claude Code's last answer for each folder.
+    private var claudeCode: [String: ClaudeCodeAnswer] = [:]
+    /// Folders being asked now: a refresh never starts a second CLI on one folder.
+    private var asking: Set<String> = []
     /// Limits a chat ran into, by account and window: Claude Code's own refusals, read as they happen.
-    private var limitHits: [UUID: [UsageWindow.Kind: LimitHit]] = [:]
+    private var limitHits: [ClaudeAccountKey: [UsageWindow.Kind: LimitHit]] = [:]
     private var seenHits: Set<LimitHit> = []
     private var transcriptWatcher: FileWatcher?
     private var liveCodex: CodexAccountInfo?
@@ -127,6 +135,8 @@ final class AppModel: PanelModel {
         if firstRun { await discover() }
         await adoptLiveCodex()
         refreshRunning()
+        // Before the first rows, so a connected account never flashes "No live limits".
+        await findSignIns()
         rebuild()
         if !readOnly {
             observeApps()
@@ -232,11 +242,13 @@ final class AppModel: PanelModel {
                 .map { hit in (hit, claude.window(runningChat: hit.sessionId, cwd: hit.cwd, at: hit.at)?.standardizedFileURL.path) }
         }.value
         var changed = false
-        // Each refusal is judged once: later, the chat may run in another window.
+        // Each refusal is judged once: later, the chat may run in another window. It belongs to the account
+        // that window showed when it ran into the limit, even if the window signs in to another one later.
         for (hit, dataDir) in found where seenHits.insert(hit).inserted {
             guard let dataDir, let account = claudeAccounts.first(where: { profile($0)?.dataDir.standardizedFileURL.path == dataDir }),
-                  (limitHits[account.id]?[hit.kind]?.at ?? .distantPast) < hit.at else { continue }
-            limitHits[account.id, default: [:]][hit.kind] = hit
+                  let key = profile(account)?.limitsAccount(addedAs: account.claude?.accountUuid),
+                  (limitHits[key]?[hit.kind]?.at ?? .distantPast) < hit.at else { continue }
+            limitHits[key, default: [:]][hit.kind] = hit
             changed = true
         }
         if changed { rebuild() }
@@ -455,42 +467,90 @@ final class AppModel: PanelModel {
         isRefreshing = true
         defer { isRefreshing = false }
         grokBotAccounts = grokBot.accounts().filter { bot in !accounts.contains { $0.grok?.botAccount == bot } }
-        // Every Claude window as it is now, resolved once: an account's numbers come from all of its windows.
-        let infos = claudeAccounts.compactMap { account in account.claude.map { (account.id, $0) } }, claude = self.claude
-        let windows = await Task.detached { Dictionary(infos.map { ($0.0, claude.resolve($0.1)) }) { first, _ in first } }.value
-        await withTaskGroup(of: (UUID, Result<UsageSnapshot, UsageError>?).self) { group in
-            for account in accounts {
+        await findSignIns()
+        // The rows follow a new or lost sign-in while Claude Code answers.
+        rebuild()
+        // Claude limits come from each signed-in folder once, for every window of its account.
+        let folders = readOnly ? [] : Set(signIns.values).filter { force || isDue(folder: $0) }.subtracting(asking)
+        asking.formUnion(folders)
+        await withTaskGroup(of: Fetched.self) { group in
+            for account in accounts where account.provider != .claude {
                 guard force || isDue(account) else { continue }
-                group.addTask { [self] in (account.id, await self.fetchUsage(account, windows: windows)) }
+                group.addTask { [self] in .account(account.id, await self.fetchUsage(account)) }
             }
-            for await (id, result) in group {
-                guard let result else { continue }
-                lastFetch[id] = Date()
-                switch result {
-                case .success(let snapshot):
-                    usage[id] = snapshot
-                    problems[id] = nil
-                case .failure(let error):
-                    problems[id] = error
+            for dir in folders {
+                group.addTask { [self] in .claudeCode(dir, await self.askClaudeCode(dir)) }
+            }
+            for await fetched in group {
+                switch fetched {
+                case .account(let id, let result):
+                    guard let result else { continue }
+                    lastFetch[id] = Date()
+                    switch result {
+                    case .success(let snapshot):
+                        usage[id] = snapshot
+                        problems[id] = nil
+                    case .failure(let error):
+                        problems[id] = error
+                    }
+                case .claudeCode(let dir, let result):
+                    asking.remove(dir)
+                    var answer = claudeCode[dir] ?? ClaudeCodeAnswer()
+                    answer.asked = Date()
+                    switch result {
+                    case .success(let snapshot):
+                        answer.usage = snapshot
+                        answer.problem = nil
+                    case .failure(let error):
+                        answer.problem = error
+                    }
+                    claudeCode[dir] = answer
                 }
             }
         }
         rebuild()
     }
 
+    /// Which stored Claude Code folder serves each account and org a window shows now. A folder that Claude
+    /// Code says is signed out gives way to another of the same account. Every window of that account keeps the
+    /// folder too, so removing the window that connected never loses the sign-in.
+    private func findSignIns() async {
+        let infos = claudeAccounts.compactMap { a in a.claude.map { (id: a.id, info: $0) } }, claude = self.claude, cli = claudeCLI
+        let signedOut = Set(claudeCode.filter { $0.value.problem == .needsSignIn }.keys)
+        let (keys, found) = await Task.detached {
+            let keys = Dictionary(infos.compactMap { w in claude.resolve(w.info).limitsAccount(addedAs: w.info.accountUuid).map { (w.id, $0) } }) { a, _ in a }
+            return (keys, cli.signIns(infos.compactMap(\.info.cliConfigDir), for: Set(keys.values), signedOut: signedOut))
+        }.value
+        signIns = found
+        var stored = false
+        for i in accounts.indices where accounts[i].claude != nil && accounts[i].claude?.cliConfigDir == nil {
+            guard let key = keys[accounts[i].id], let dir = found[key] else { continue }
+            accounts[i].claude?.cliConfigDir = dir
+            stored = true
+        }
+        if stored { save() }
+    }
+
     /// How often each source is worth asking (local files often, network and CLIs rarely).
     private func isDue(_ account: Account) -> Bool {
         let interval: TimeInterval = switch account.provider {
-        case .claude: account.claude?.cliConfigDir == nil ? 60 : 300
         case .grok: account.grok?.source == .grokBot ? 60 : 900
-        case .codex, .kimi, .zai: 300
+        case .claude, .codex, .kimi, .zai: 300
         }
         return Date().timeIntervalSince(lastFetch[account.id] ?? .distantPast) >= interval
     }
 
-    nonisolated private func fetchUsage(_ account: Account, windows: [UUID: ClaudeProfile]) async -> Result<UsageSnapshot, UsageError>? {
+    /// A Claude Code folder is asked every 5 minutes.
+    private func isDue(folder: String) -> Bool {
+        Date().timeIntervalSince(claudeCode[folder]?.asked ?? .distantPast) >= 300
+    }
+
+    /// Claude Code's live limits from the CLI signed in to `dir`. Signed out reads as needsSignIn.
+    nonisolated private func askClaudeCode(_ dir: String) async -> Result<UsageSnapshot, UsageError> {
         do {
-            return .success(try await fetchUsageThrowing(account, windows: windows))
+            return .success(try await claudeCLI.usage(configDir: URL(filePath: dir, directoryHint: .isDirectory)))
+        } catch UsageError.notConnected {
+            return .failure(.needsSignIn)
         } catch let error as UsageError {
             return .failure(error)
         } catch {
@@ -498,28 +558,20 @@ final class AppModel: PanelModel {
         }
     }
 
-    nonisolated private func fetchUsageThrowing(_ account: Account, windows: [UUID: ClaudeProfile]) async throws -> UsageSnapshot {
+    nonisolated private func fetchUsage(_ account: Account) async -> Result<UsageSnapshot, UsageError>? {
+        do {
+            return .success(try await fetchUsageThrowing(account))
+        } catch let error as UsageError {
+            return .failure(error)
+        } catch {
+            return .failure(.unexpected(error.localizedDescription))
+        }
+    }
+
+    nonisolated private func fetchUsageThrowing(_ account: Account) async throws -> UsageSnapshot {
         switch account.provider {
         case .claude:
-            guard let info = account.claude else { throw UsageError.notConnected }
-            // The Claude app saves numbers per org, not per account: only windows showing this account and org count.
-            let mine = windows[account.id] ?? claude.resolve(info)
-            let same = [mine] + windows.values.filter { window in
-                window.dataDir.standardizedFileURL != mine.dataDir.standardizedFileURL && window.accountUuid != nil
-                    && window.accountUuid == mine.accountUuid && window.orgUuid == mine.orgUuid
-            }
-            if let dir = info.cliConfigDir, !readOnly {
-                do {
-                    return try await claudeCLI.usage(configDir: URL(filePath: dir, directoryHint: .isDirectory))
-                } catch UsageError.notConnected {
-                    throw UsageError.needsSignIn
-                } catch {
-                    if let local = ClaudeAppUsage.read(profiles: same) { return local }
-                    throw error
-                }
-            }
-            guard let local = ClaudeAppUsage.read(profiles: same) else { throw UsageError.notConnected }
-            return local
+            throw UsageError.notConnected   // asked per Claude Code folder, in askProviders
         case .codex:
             guard let info = account.codex else { throw UsageError.notConnected }
             return try await codex.usage(info, refresh: !readOnly)
@@ -558,55 +610,70 @@ final class AppModel: PanelModel {
     private func rebuild() {
         var rows: [PanelRow] = []
         let now = Date()
+        // Each Claude window once: whether it runs, and whose live limits it shows.
+        var windows: [UUID: ClaudeProfile] = [:], keys: [UUID: ClaudeAccountKey] = [:]
+        for account in claudeAccounts {
+            guard let window = profile(account) else { continue }
+            windows[account.id] = window
+            keys[account.id] = window.limitsAccount(addedAs: account.claude?.accountUuid)
+        }
         for account in accounts {
             var snapshot = usage[account.id]?.at(now)
+            var error = errorText(problems[account.id], account: account, hasUsage: snapshot != nil)
+            var needsSignIn = problems[account.id] == .needsSignIn
+            var isLive = false
             if account.provider == .claude {
-                // The Claude app's numbers count for as long as their window lasts; a limit a chat ran into
-                // since then says exactly when it comes back.
-                if let app = snapshot, app.source == ClaudeAppUsage.source { snapshot = ClaudeAppUsage.current(app, now: now) }
-                snapshot = UsageSnapshot.with(Array((limitHits[account.id] ?? [:]).values), on: snapshot, now: now)
+                // Claude Code's live numbers, or one line why there are none; a limit a chat of the account ran
+                // into still says exactly when it comes back, on every window of the account.
+                let key = keys[account.id], dir = key.flatMap { signIns[$0] }, answer = dir.flatMap { claudeCode[$0] }
+                let limits = ClaudeLimits.row(account: key != nil, signIn: dir != nil, answer: answer?.usage, problem: answer?.problem, now: now)
+                snapshot = UsageSnapshot.with(Array((key.flatMap { limitHits[$0] } ?? [:]).values), on: limits.usage?.at(now), now: now)
+                isLive = limits.usage != nil
+                error = isLive ? accountNote(account) : limits.note
+                // An open window whose account isn't known yet is still at Claude's sign-in.
+                if key == nil, windows[account.id].map(isRunning) ?? false { error = ClaudeLimits.signInFirst }
+                needsSignIn = limits.connect
             }
-            let problem = problems[account.id]
             var row = PanelRow(
                 id: account.id, provider: account.provider, label: account.label, color: account.color,
-                plan: Self.plan(snapshot?.plan ?? account.codex?.plan?.capitalized, label: account.label), state: state(of: account, usage: snapshot),
-                usage: snapshot, error: errorText(problem, account: account, hasUsage: snapshot != nil),
-                needsSignIn: problem == .needsSignIn
+                plan: Self.plan(snapshot?.plan ?? account.codex?.plan?.capitalized, label: account.label),
+                state: state(of: account, window: windows[account.id], usage: snapshot),
+                usage: snapshot, error: error, needsSignIn: needsSignIn
             )
             if account.provider == .claude {
-                let waiting = (profile(account).map(isRunning) ?? false) ? pending[account.id] ?? Pending() : Pending()
+                let waiting = (windows[account.id].map(isRunning) ?? false) ? pending[account.id] ?? Pending() : Pending()
                 row.pendingSessions = waiting.new
                 row.pendingChanges = waiting.changed
-                row.canConnectLimits = account.claude?.cliConfigDir == nil
+                row.isLive = isLive
+                row.limitsGroup = keys[account.id]?.description
                 row.hasFolder = true
                 row.signInLink = signInLinks[account.id]
-                if let note = accountNote(account) { row.error = note }
             }
             rows.append(row)
         }
         markBest(&rows)
         self.rows = rows
         let claudeRows = rows.filter { $0.provider == .claude }
-        // The rings show live numbers only; an old, undated reading draws the "unknown" outline.
+        // The rings show live numbers only; without them they draw the "unknown" outline.
         menuBarUsage = (claudeRows.first { $0.id == lastClaude } ?? claudeRows.first { $0.state == .running } ?? claudeRows.first)?
             .usage.flatMap { $0.isCurrent(now: now) ? $0 : nil }
     }
 
-    private func state(of account: Account, usage: UsageSnapshot?) -> PanelRow.State {
+    private func state(of account: Account, window: ClaudeProfile?, usage: UsageSnapshot?) -> PanelRow.State {
         switch account.provider {
-        case .claude: (profile(account).map(isRunning) ?? false) ? .running : .idle
+        case .claude: (window.map(isRunning) ?? false) ? .running : .idle
         case .codex: (account.codex.map { info in liveCodex.map { Self.same($0, info) } ?? false } ?? false) ? .active : .idle
         case .grok, .kimi, .zai: usage != nil ? .active : .idle
         }
     }
 
+    /// Codex, Grok, Kimi and Z.ai. Claude rows say why they have no live limits through ClaudeLimits.
     private func errorText(_ problem: UsageError?, account: Account, hasUsage: Bool) -> String? {
         switch problem {
         case nil: nil
         case .needsSignIn:
             account.provider == .kimi || account.provider == .zai ? "Key no longer works" : "Sign in again"
-        case .notConnected:
-            account.provider == .claude ? (hasUsage ? nil : "Open this profile once to see limits") : "Not connected"
+        case .notConnected: "Not connected"
         case .noPlan: "No plan with limits"
         case .network: hasUsage ? nil : "Offline"
         case .unexpected(let message): message
@@ -614,15 +681,20 @@ final class AppModel: PanelModel {
     }
 
     /// ✦ = most room left among a provider's signed-in accounts (in their tightest main window), or with none
-    /// left anywhere, the one back soonest. Same rule as `openaccs best` (`ControlAccount.best`).
+    /// left anywhere, the one back soonest. Same rule as `openaccs best` (`ControlAccount.best`). Windows of one
+    /// Claude account show the same numbers: the account is scored once and the ✦ goes on all of its windows.
     private func markBest(_ rows: inout [PanelRow]) {
+        let now = Date()
         for provider in Provider.allCases {
-            // Hours-old numbers that don't say when they reset can't be compared with live ones.
-            let now = Date()
-            let scored = rows.indices.filter { rows[$0].provider == provider && !rows[$0].needsSignIn && rows[$0].usage?.isCurrent(now: now) == true }
-                .compactMap { i in rows[i].usage?.room.map { (i, $0) } }
+            var groups = Set<String>()
+            let scored = rows.indices.filter { i in
+                rows[i].provider == provider && !rows[i].needsSignIn && rows[i].usage?.isCurrent(now: now) == true
+                    && rows[i].limitsGroup.map { groups.insert($0).inserted } ?? true
+            }.compactMap { i in rows[i].usage?.room.map { (i, $0) } }
             guard scored.count > 1, let best = Room.best(scored) else { continue }
-            rows[best].isBest = true
+            for i in rows.indices where i == best || (rows[best].limitsGroup != nil && rows[i].limitsGroup == rows[best].limitsGroup) {
+                rows[i].isBest = true
+            }
         }
     }
 
@@ -665,45 +737,66 @@ final class AppModel: PanelModel {
         refreshRunning()
     }
 
+    /// Signs Claude Code in for the account and org this window shows, in a new folder of its own, and gives
+    /// that folder to every window of the account once Claude Code's own `.claude.json` names them.
     func connectExactLimits(_ id: UUID) async throws {
-        guard let i = accounts.firstIndex(where: { $0.id == id }) else { return }
-        let account = accounts[i]
-        let dir = claudeCLI.configDir(for: id)
-        let email = account.label.contains("@") ? account.label : nil
+        await findSignIns()
+        guard let account = accounts.first(where: { $0.id == id }), let info = account.claude, let window = profile(account) else { return }
+        guard let key = window.limitsAccount(addedAs: info.accountUuid) else {
+            throw AppError.accountUnknown(account.label, running: isRunning(window))
+        }
+        let current = signIns[key], answer = current.flatMap { claudeCode[$0] }
+        let limits = ClaudeLimits.row(account: true, signIn: current != nil, answer: answer?.usage, problem: answer?.problem, now: Date())
+        guard limits.connect else {
+            guard limits.usage == nil else { throw AppError.alreadyLive(account.label) }
+            // Another window of the account connected it: ask that sign-in instead of signing in again.
+            rebuild()
+            await refreshUsage(force: false)
+            return
+        }
+        guard signingIn == nil else { throw AppError.anotherSignIn }
+        signingIn = id
         defer {
+            signingIn = nil
             signInLinks[id] = nil
             rebuild()
         }
-        try await claudeCLI.login(configDir: dir, email: email) { link in
-            Task { @MainActor [weak self] in
-                self?.signInLinks[id] = link
-                self?.rebuild()
+        let names = windowList(claudeAccounts.filter { a in profile(a)?.limitsAccount(addedAs: a.claude?.accountUuid) == key }.map(\.label))
+        let dir = claudeCLI.configDir(for: UUID())
+        // The sign-in page can fill in the email when OpenAccs knows it: from the account's sign-in that ended, else
+        // from the label while the window still shows the account it was added with.
+        let email = current.flatMap { claudeCLI.identity(configDir: URL(filePath: $0, directoryHint: .isDirectory))?.email }
+            ?? (account.label.contains("@") && accountNote(account) == nil ? account.label : nil)
+        let browser = Browser.current
+        do {
+            try await claudeCLI.login(configDir: dir, email: email) { [weak self] link in
+                Task { @MainActor in
+                    // A link that arrives after this sign-in ended belongs to nobody.
+                    guard let self, self.signingIn == id else { return }
+                    self.signInLinks[id] = link
+                    self.rebuild()
+                    // A test home never opens a browser.
+                    guard !Paths.isOverridden else { return }
+                    if let browser { browser.open(link) } else { NSWorkspace.shared.open(link) }
+                }
             }
+        } catch ProcessError.timedOut {
+            throw AppError.signInTimedOut
+        } catch ProcessError.notFound {
+            throw AppError.noClaudeCode
         }
+        // The browser may have signed Claude Code in to another account: never show its limits under this one.
         guard let who = claudeCLI.identity(configDir: dir) else { throw AppError.signInIncomplete }
-        // The browser may have signed the CLI into another account: never show its limits under this one.
-        let expected = profile(account)?.accountUuid
-        let mismatch = if let expected, let uuid = who.accountUuid {
-            expected.lowercased() != uuid.lowercased()
-        } else if let email, let address = who.email {
-            address.lowercased() != email.lowercased()
-        } else {
-            false
+        guard who.accountUuid?.lowercased() == key.account else {
+            throw AppError.wrongAccount(who.email, names, privately: browser?.privateFlag != nil)
         }
-        if mismatch {
-            // Reconnecting: that folder now holds the other account, so stop reading limits from it.
-            if let j = accounts.firstIndex(where: { $0.id == id }), accounts[j].claude?.cliConfigDir != nil {
-                accounts[j].claude?.cliConfigDir = nil
-                lastFetch[id] = nil
-                save()
-                rebuild()
-            }
-            throw AppError.wrongAccount(who.email, account.label)
+        guard who.matches(key) else { throw AppError.wrongOrganization(who.organization, names) }
+        let windows = claudeAccounts.map { a in
+            (id: a.id, key: profile(a)?.limitsAccount(addedAs: a.claude?.accountUuid), dir: a.claude?.cliConfigDir)
         }
-        guard let j = accounts.firstIndex(where: { $0.id == id }) else { return }
-        accounts[j].claude?.cliConfigDir = dir.path
+        let sharing = Set(claudeCLI.sharing(who, among: windows))
+        for i in accounts.indices where sharing.contains(accounts[i].id) { accounts[i].claude?.cliConfigDir = dir.path }
         save()
-        lastFetch[id] = nil
         await refreshUsage(force: false)
     }
 
@@ -876,10 +969,25 @@ final class AppModel: PanelModel {
 struct Pending: Equatable, Sendable {
     /// Sessions it has no card for (or got one after it launched).
     var new = 0
-    /// Chats whose pin, archive, permission mode, effort or model changed in another window.
+    /// Chats, pins and app settings that differ from the other windows'.
     var changed = 0
 
     var total: Int { new + changed }
+}
+
+/// Claude Code's last answer for one signed-in folder.
+private struct ClaudeCodeAnswer {
+    /// The last numbers it gave.
+    var usage: UsageSnapshot?
+    /// Why the last ask failed. nil after a good answer.
+    var problem: UsageError?
+    var asked = Date.distantPast
+}
+
+/// One result of a refresh: an account's own numbers, or a Claude Code folder's.
+private enum Fetched: Sendable {
+    case account(UUID, Result<UsageSnapshot, UsageError>?)
+    case claudeCode(String, Result<UsageSnapshot, UsageError>)
 }
 
 enum AppError: LocalizedError {
@@ -887,7 +995,13 @@ enum AppError: LocalizedError {
     case claudeWontQuit
     case signInIncomplete
     case keyRejected(String)
-    case wrongAccount(String?, String)
+    case wrongAccount(String?, String, privately: Bool)
+    case wrongOrganization(String?, String)
+    case accountUnknown(String, running: Bool)
+    case alreadyLive(String)
+    case anotherSignIn
+    case signInTimedOut
+    case noClaudeCode
     case migrationFailed
     case testHome
 
@@ -899,8 +1013,19 @@ enum AppError: LocalizedError {
         case .keyRejected(let name): "\(name) didn't accept this key."
         case .migrationFailed: "Couldn't move this profile's history into ~/.claude, so it wasn't opened on the shared folder."
         case .testHome: "Codex doesn't switch with a test home (OPENACCS_HOME)."
-        case .wrongAccount(let actual, let wanted):
-            "Claude Code signed in as \(actual ?? "another account"), not \(wanted). Switch accounts on claude.ai in your browser and try again."
+        case .wrongAccount(let actual, let names, let privately):
+            "Claude Code signed in as \(actual ?? "another account"), not the account you use in \(names). "
+                + (privately ? "Close every private window, then try again."
+                    : "Sign in again, and open the link in a private window with Copy link.")
+        case .wrongOrganization(let organization, let names):
+            "Claude Code signed in to \(organization ?? "another organization"), not the organization you use in \(names). Try again and choose that organization."
+        case .accountUnknown(let label, let running):
+            running ? "Sign in to Claude in \(label) first, so OpenAccs knows its account."
+                : "Open \(label) once first, so OpenAccs knows its account."
+        case .alreadyLive(let label): "\(label) already has live limits."
+        case .anotherSignIn: "Another sign-in is open. Finish it in the browser, or cancel it first."
+        case .signInTimedOut: "The sign-in waited 10 minutes and stopped. Try again."
+        case .noClaudeCode: "Claude Code isn't on this Mac yet. Install it, or open the Code tab in Claude once, then try again."
         }
     }
 }

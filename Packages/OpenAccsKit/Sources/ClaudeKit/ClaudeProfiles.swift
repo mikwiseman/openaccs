@@ -14,6 +14,8 @@ public struct ClaudeProfile: Sendable, Hashable {
     /// Claude's log named this folder. Otherwise it's a guess, and while the app runs any of the profile's
     /// folders may be the one it has loaded.
     public var isConfirmed: Bool
+    /// Not confirmed, and the account has card folders in more than one org: the org is a guess too.
+    public var orgIsGuess = false
 
     public init(dataDir: URL, isDefault: Bool, accountUuid: String? = nil, orgUuid: String? = nil, isConfirmed: Bool = false) {
         self.dataDir = dataDir
@@ -116,7 +118,9 @@ public struct ClaudeProfiles: Sendable {
         let stored = folders.filter { $0.account == account }
         if let folder = (stored.isEmpty ? folders.filter { $0.newestCard != nil } : stored)
             .max(by: { ($0.newestCard ?? .distantPast) < ($1.newestCard ?? .distantPast) }) {
-            return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: folder.account, orgUuid: folder.org)
+            var profile = ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: folder.account, orgUuid: folder.org)
+            profile.orgIsGuess = stored.count > 1
+            return profile
         }
         return ClaudeProfile(dataDir: dataDir, isDefault: isDefault, accountUuid: account, orgUuid: nil)
     }
@@ -141,20 +145,25 @@ public struct ClaudeProfiles: Sendable {
     }
 
     /// `<acct>/<org>` of the latest session load, including a first login whose folder doesn't exist yet.
-    /// Newest log first, reading only the last 4 MB of each.
+    /// Newest log first, reading only the last 4 MB of each. An older log counts only when every newer one
+    /// was read whole: what a newer log said before its last 4 MB is newer than anything in an older one.
     func loggedFolder(dataDir: URL) -> (account: String, org: String)? {
         let markers = ["persisted sessions from ", "Session storage directory does not exist yet, skipping load: "]
             .map { Data("\($0)\(dataDir.path)/claude-code-sessions/".utf8) }
         let ends: Set<UInt8> = [0x2F, 0x20, 0x0A, 0x0D, 0x09]  // / space \n \r \t
+        let bytes = 4 << 20
         for name in ["main.log", "main1.log", "main2.log"] {
-            guard let text = Self.tail(of: paths.claudeLogsDir.appending(path: name), bytes: 4 << 20),
-                  let hit = markers.compactMap({ text.range(of: $0, options: .backwards) })
-                    .max(by: { $0.lowerBound < $1.lowerBound }) else { continue }
-            let account = text[hit.upperBound...].prefix { !ends.contains($0) }
-            guard text[account.endIndex...].first == 0x2F else { continue }
-            let org = text[(account.endIndex + 1)...].prefix { !ends.contains($0) }
-            let (a, o) = (String(decoding: account, as: UTF8.self), String(decoding: org, as: UTF8.self))
-            if FS.isSafeName(a) && FS.isSafeName(o) { return (a, o) }
+            let log = paths.claudeLogsDir.appending(path: name)
+            if let text = Self.tail(of: log, bytes: bytes),
+               let hit = markers.compactMap({ text.range(of: $0, options: .backwards) }).max(by: { $0.lowerBound < $1.lowerBound }) {
+                let account = text[hit.upperBound...].prefix { !ends.contains($0) }
+                if text[account.endIndex...].first == 0x2F {
+                    let org = text[(account.endIndex + 1)...].prefix { !ends.contains($0) }
+                    let (a, o) = (String(decoding: account, as: UTF8.self), String(decoding: org, as: UTF8.self))
+                    if FS.isSafeName(a) && FS.isSafeName(o) { return (a, o) }
+                }
+            }
+            if (FS.size(log) ?? 0) > Int64(bytes) { return nil }
         }
         return nil
     }

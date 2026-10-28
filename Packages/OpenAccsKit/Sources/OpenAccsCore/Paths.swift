@@ -12,8 +12,12 @@ public struct Paths: Sendable, Hashable {
     public var accountsFile: URL { appSupport.appending(path: "accounts.json") }
     public var syncStateFile: URL { appSupport.appending(path: "claude-sync.json") }
     public var backupsDir: URL { appSupport.appending(path: "Backups", directoryHint: .isDirectory) }
-    /// New Claude profiles: `<claudeProfilesDir>/<uuid>/Data` (desktop) and `.../Code` (CLI for limits).
+    /// New Claude windows: `<claudeProfilesDir>/<uuid>/Data`. A `Code` folder beside it is a 0.4.x sign-in
+    /// for limits, read where it is.
     public var claudeProfilesDir: URL { appSupport.appending(path: "Claude", directoryHint: .isDirectory) }
+    /// Claude Code sign-ins for live limits: a new `<uuid>` folder per sign-in, never moved, renamed or
+    /// reused (the CLI names its Keychain item after the exact path).
+    public var claudeSignInsDir: URL { appSupport.appending(path: "Claude Code", directoryHint: .isDirectory) }
     public var grokHomesDir: URL { appSupport.appending(path: "Grok", directoryHint: .isDirectory) }
 
     // Claude desktop

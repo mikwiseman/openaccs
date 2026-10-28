@@ -8,8 +8,8 @@ struct AccountRow: View {
     let now: Date
     /// Scrolls the list so this whole row shows, with the question it just opened.
     let reveal: () -> Void
-    /// Opens the add flow for this provider again (expired login or key).
-    let signIn: (Provider) -> Void
+    /// Claude: the guided connect for this window's account. Others: the add flow again (expired login or key).
+    let signIn: (PanelRow) -> Void
 
     @State private var hovering = false
     @State private var confirm: Confirm?
@@ -20,14 +20,16 @@ struct AccountRow: View {
     @State private var task: Task<Void, Never>?
     @State private var failure: String?
     @State private var pulse = 0
-    @State private var copiedLink = false
     @FocusState private var nameFocused: Bool
 
     enum Confirm { case switchCodex, remove }
 
     private var color: Color { AccountColor.color(row.color) }
     private var meters: [UsageWindow] { UsageText.meters(row.usage) }
-    private var staleNote: String? { row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
+    /// Claude numbers are live or an exact limit hit, never old.
+    private var staleNote: String? { row.provider == .claude ? nil : row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
+    /// Claude without live limits: why, and the one way to get them (none while a sign-in already runs).
+    private var offersConnect: Bool { row.provider == .claude && row.needsSignIn && row.signInLink == nil }
 
     /// Meters and captions start under the label, not under the dot.
     static let indent: CGFloat = 18
@@ -64,12 +66,17 @@ struct AccountRow: View {
         .onHover { hovering = $0 }
         .contextMenu { menu }
         .onChange(of: row.state) { old, new in if old == .idle && new != .idle { pulse += 1 } }
+        // Live limits arrived, from the panel or a terminal sign-in.
+        .onChange(of: row.isLive) { old, new in if !old && new { pulse += 1 } }
         .onChange(of: confirm) { _, new in if new != nil { reveal() } }
         .animation(.snappy(duration: 0.22), value: confirm)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, tap)
+        .accessibilityActions {
+            if offersConnect { Button("Connect live limits") { signIn(row) } }
+        }
     }
 
     // MARK: Parts
@@ -132,47 +139,40 @@ struct AccountRow: View {
                 .captionStyle(lines: 2)
                 .allowsHitTesting(false)
         } else if let working {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(working).foregroundStyle(.secondary).allowsHitTesting(false)
-                    Button("Cancel") { task?.cancel() }.buttonStyle(.inlineLink)
-                }
-                // claude.ai finishes the sign-in for whoever is signed in there; another account can't.
-                if let link = row.signInLink {
-                    HStack(spacing: 0) {
-                        Text("Wrong account? ").foregroundStyle(.secondary).allowsHitTesting(false)
-                        Button(copiedLink ? "Copied" : "Copy link") { copy(link) }.buttonStyle(.inlineLink)
-                        Text(" for a private window").foregroundStyle(.secondary).allowsHitTesting(false)
-                    }
-                }
+            HStack(spacing: 8) {
+                Text(working).foregroundStyle(.secondary).allowsHitTesting(false)
+                Button("Cancel") { task?.cancel() }.buttonStyle(.inlineLink)
             }
             .captionStyle()
-        } else if row.needsSignIn {
+        } else if row.needsSignIn && row.provider != .claude {
             HStack(spacing: 0) {
                 Text(signedOutNote).foregroundStyle(.orange).allowsHitTesting(false)
                 separator
-                Button(usesKey ? "Replace key" : "Sign in") {
-                    row.provider == .claude ? connectLimits() : signIn(row.provider)
-                }
-                .buttonStyle(.inlineLink)
+                Button(usesKey ? "Replace key" : "Sign in") { signIn(row) }
+                    .buttonStyle(.inlineLink)
             }
             .captionStyle()
         } else {
             let notes = notes
             let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges)
-            // No numbers worth showing, or an empty limit with no time it comes back (the Claude app's numbers
-            // don't have one): the way to live ones (Anthropic's CLI, one browser sign-in).
-            let backUnknown = meters.contains { UsageText.isEmpty($0) && $0.resetsAt == nil }
-            let offerLive = row.provider == .claude && row.canConnectLimits && (row.usage == nil || backUnknown)
-            if offerLive {
+            // A Claude Code sign-in running for this window offers its link for a private window; without live
+            // limits, the row says why and offers the one way to get them.
+            let limitsLine = row.provider == .claude && (offersConnect || row.signInLink != nil)
+            if limitsLine {
                 HStack(spacing: 0) {
-                    Text(row.usage == nil ? row.error ?? "No limits yet" : "Back time unknown").foregroundStyle(.secondary).allowsHitTesting(false)
-                    separator
-                    Button("Connect exact limits", action: connectLimits).buttonStyle(.inlineLink)
+                    if let link = row.signInLink {
+                        Text("Signing in to Claude Code").foregroundStyle(.secondary).allowsHitTesting(false)
+                        separator
+                        CopyLinkButton(link: link)
+                    } else {
+                        Text(row.error ?? "No live limits").foregroundStyle(.secondary).allowsHitTesting(false)
+                        separator
+                        Button("Connect") { signIn(row) }.buttonStyle(.inlineLink)
+                    }
                 }
                 .captionStyle()
             }
-            let error = offerLive && row.usage == nil ? nil : row.error
+            let error = limitsLine ? nil : row.error
             if waiting != nil || !notes.isEmpty || error != nil {
                 HStack(spacing: 0) {
                     if let error {
@@ -196,13 +196,11 @@ struct AccountRow: View {
 
     private var usesKey: Bool { row.provider == .kimi || row.provider == .zai }
 
-    /// Says what stopped working, so the link next to it reads as the fix.
+    /// Says what stopped working, so the link next to it reads as the fix. Claude rows say it in their limits line.
     private var signedOutNote: String {
         switch row.provider {
         case .kimi, .zai: row.error ?? "Key no longer works"
-        // The Claude app may be fine; it's the Claude Code login behind exact limits that expired.
-        case .claude: "Limits signed out"
-        case .codex, .grok: "Signed out"
+        case .claude, .codex, .grok: "Signed out"
         }
     }
 
@@ -282,9 +280,6 @@ struct AccountRow: View {
             }
         }
         .pickerStyle(.menu)
-        if row.canConnectLimits {
-            Button("Connect Exact Limits…", action: connectLimits)
-        }
         if row.hasFolder {
             Button("Show Data Folder") { model.revealFolder(row.id) }
         }
@@ -308,24 +303,8 @@ struct AccountRow: View {
         }
     }
 
-    private func copy(_ link: URL) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(link.absoluteString, forType: .string)
-        copiedLink = true
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            copiedLink = false
-        }
-    }
-
     private func restart() {
         run("Restarting Claude…") { try await model.restart(row.id) }
-    }
-
-    private func connectLimits() {
-        run(row.label.contains("@") ? "Sign in as \(row.label)…" : "Sign in to Claude Code in your browser…") {
-            try await model.connectExactLimits(row.id)
-        }
     }
 
     private func commitRename() {
@@ -364,7 +343,9 @@ struct AccountRow: View {
         parts.append(row.state == .running ? "open" : row.state == .active ? "active" : "not open")
         if row.isBest { parts.append("most left") }
         for w in meters { parts.append("\(UsageText.spokenWindow(w)), \(UsageText.spoken(w, now: now))") }
-        if row.needsSignIn { parts.append(signedOutNote + (usesKey ? "" : ", sign in again")) }
+        if row.provider == .claude, row.signInLink != nil { parts.append("Signing in to Claude Code") }
+        else if offersConnect { parts.append((row.error ?? "No live limits") + ", connect") }
+        else if row.needsSignIn { parts.append(signedOutNote + (usesKey ? "" : ", sign in again")) }
         else if let error = row.error { parts.append(error) }
         if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) { parts.append(waiting) }
         if !notes.isEmpty { parts.append(notes.replacingOccurrences(of: "  ·  ", with: ", ")) }

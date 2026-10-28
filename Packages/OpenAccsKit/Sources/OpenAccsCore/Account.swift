@@ -55,8 +55,9 @@ public struct ClaudeAccountInfo: Codable, Hashable, Sendable {
     /// The old CLAUDE_CONFIG_DIR after the move. Re-imported (copy-only, idempotent) whenever the profile
     /// stops, so a launch through an old launcher that still uses it never strands sessions there.
     public var migratedFrom: String?
-    /// OpenAccs-owned CLAUDE_CONFIG_DIR where the official Claude Code CLI is signed in for this
-    /// account, used only to ask the CLI for exact limits. nil = not connected.
+    /// An OpenAccs-owned CLAUDE_CONFIG_DIR where Anthropic's Claude Code CLI is signed in, used only to ask
+    /// it for live limits, and kept verbatim. It counts for every window whose account and org its own
+    /// `.claude.json` names, so every window of an account holds the same one. nil = none stored here.
     public var cliConfigDir: String?
     /// Last account UUID seen for this profile (from Claude's log or card folders; never config.json).
     public var accountUuid: String?

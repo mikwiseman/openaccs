@@ -39,10 +39,11 @@ public struct LimitHit: Sendable, Hashable {
 extension UsageSnapshot {
     /// These numbers with the limits the account ran into: such a window is empty until the hit's exact reset
     /// and free after it. Numbers taken after the reset know better, and so do exact numbers (with their own
-    /// reset time) taken after the hit; numbers without a reset time taken in between get the hit's.
+    /// reset time) taken after the hit; numbers without a reset time taken in between get the hit's. Without
+    /// numbers, a limit that already came back says nothing.
     public static func with(_ hits: [LimitHit], on snapshot: UsageSnapshot?, now: Date) -> UsageSnapshot? {
         var result = snapshot
-        for hit in hits where snapshot.map({ $0.asOf < hit.resetsAt }) ?? true {
+        for hit in hits where snapshot.map({ $0.asOf < hit.resetsAt }) ?? (hit.resetsAt > now) {
             var usage = result ?? UsageSnapshot(windows: [], asOf: hit.at, source: "Claude Code")
             let current = usage.window(hit.kind)
             let newer = snapshot.map { $0.asOf >= hit.at } ?? false

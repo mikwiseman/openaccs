@@ -5,15 +5,18 @@ import OpenAccsCore
 struct PanelView: View {
     let model: any PanelModel
     @State private var adding: Provider?
+    /// The Claude window whose account the guided connect is for.
+    @State private var connecting: UUID?
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "general"
     @State private var listHeight: CGFloat = 0
     /// Which ends of the scrolling list have more beyond them, to fade those edges.
     @State private var overflow: Edge.Set = []
 
-    init(model: any PanelModel, adding: Provider? = nil) {
+    init(model: any PanelModel, adding: Provider? = nil, connecting: UUID? = nil) {
         self.model = model
         _adding = State(initialValue: adding)
+        _connecting = State(initialValue: connecting)
     }
 
     static let width: CGFloat = 340
@@ -25,12 +28,16 @@ struct PanelView: View {
             if let provider = adding {
                 AddAccountView(provider: provider, model: model) { adding = nil }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else if let id = connecting {
+                AddAccountView(provider: .claude, connecting: id, model: model) { connecting = nil }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 list.transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
         .frame(width: Self.width)
         .animation(.snappy(duration: 0.3), value: adding)
+        .animation(.snappy(duration: 0.3), value: connecting)
     }
 
     private var list: some View {
@@ -93,7 +100,9 @@ struct PanelView: View {
                     AccountRow(row: row, model: model, now: now) {
                         // Once the question below the row is laid out: scroll just enough to show all of it.
                         Task { withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo("reveal \(row.id)") } }
-                    } signIn: { adding = $0 }
+                    } signIn: { row in
+                        if row.provider == .claude { connecting = row.id } else { adding = row.provider }
+                    }
                     // What that scrolls to: the row, plus room for the list's faded bottom edge.
                     .background { Color.clear.id("reveal \(row.id)").padding(.bottom, -32) }
                 }

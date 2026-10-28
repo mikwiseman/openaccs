@@ -214,3 +214,28 @@ extension ButtonStyle where Self == LinkButtonStyle {
 extension ButtonStyle where Self == QuietButtonStyle {
     static var quiet: QuietButtonStyle { QuietButtonStyle() }
 }
+
+/// Copies a sign-in link to open in another browser window; reads "Copied" for a moment after.
+struct CopyLinkButton: View {
+    let link: URL
+    @State private var copied = false
+
+    var body: some View {
+        Button(copied ? "Copied" : "Copy link") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(link.absoluteString, forType: .string)
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                copied = false
+            }
+        }
+        .buttonStyle(.inlineLink)
+    }
+}
+
+/// Window names as a person says them: "Claude", "Claude and ai44", "A, B and C".
+func windowList(_ labels: [String]) -> String {
+    guard let last = labels.last else { return "" }
+    return labels.count == 1 ? last : labels.dropLast().joined(separator: ", ") + " and " + last
+}

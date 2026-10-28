@@ -345,7 +345,7 @@ private final class Flag: @unchecked Sendable {
             ControlAccount(id: UUID(), provider: .zai, label: "work key", plan: "Pro", state: .active,
                            usage: UsageSnapshot(windows: [UsageWindow(kind: .monthly, usedPercent: 0, resetsAt: now.addingTimeInterval(30))],
                                                 credits: Credits(amount: 12.4, currency: "USD", label: "balance"), asOf: now, source: "API key")),
-            ControlAccount(id: UUID(), provider: .claude, label: "new", state: .idle, error: "Sign in again", needsSignIn: true),
+            ControlAccount(id: UUID(), provider: .claude, label: "new", state: .idle, error: "No live limits", needsSignIn: true),
         ]
     }
 
@@ -361,7 +361,7 @@ private final class Flag: @unchecked Sendable {
             7d  ━━━━━━━━━─   86% left
             3 new sessions · openaccs restart 2 · updated 3h ago
         3 ○ new
-            Sign in again · openaccs connect 3
+            No live limits · openaccs connect 3
 
         Codex
         4 ● me@example.com    Pro
@@ -404,8 +404,9 @@ private final class Flag: @unchecked Sendable {
     @Test func whatARestartWouldLoad() {
         #expect(ControlAccount.pendingText(new: 0, changed: 0) == nil)
         #expect(ControlAccount.pendingText(new: 1, changed: 0) == "1 new session")
-        #expect(ControlAccount.pendingText(new: 0, changed: 1) == "1 chat changed")
-        #expect(ControlAccount.pendingText(new: 0, changed: 4) == "4 chats changed")
+        // Changed chats, pins and app settings all count, so the count says changes, not chats.
+        #expect(ControlAccount.pendingText(new: 0, changed: 1) == "1 change")
+        #expect(ControlAccount.pendingText(new: 0, changed: 4) == "4 changes")
         #expect(ControlAccount.pendingText(new: 3, changed: 2) == "3 new sessions, 2 changed")
     }
 

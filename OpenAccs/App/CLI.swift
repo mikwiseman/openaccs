@@ -293,11 +293,27 @@ private struct Command {
 
     func connect() throws {
         try allow([])
-        let account = try resolve(query, in: try App.call(ControlRequest(.status)).accounts, claudeOnly: "connect")
-        Terminal.note("Sign in to Claude Code in your browser as \(account.label). Ctrl-C cancels.")
-        Terminal.note("If claude.ai says \"Unable to access Claude Code\", it's signed in as another account: click Copy link under the account in OpenAccs and open it in a private window.")
-        _ = try App.call(ControlRequest(.connect, id: account.id))
-        print("Exact limits connected for \(account.label).")
+        let before = try App.call(ControlRequest(.status)).accounts
+        let account = try resolve(query, in: before, claudeOnly: "connect")
+        // Only a row that offers Connect starts a sign-in; for the others the app's answer says why not.
+        let browser = Browser.current, privately = account.needsSignIn && browser?.privateFlag != nil
+        if account.needsSignIn, let browser, privately {
+            Terminal.note("Sign in to Claude Code with the account you use in \(account.label), in the private \(browser.name) window that opens. Close any other private windows first. Ctrl-C cancels.")
+        } else if account.needsSignIn {
+            Terminal.note("Sign in to Claude Code with the account you use in \(account.label), in your browser. Ctrl-C cancels.")
+            Terminal.note("If claude.ai says \"Unable to access Claude Code\", it's signed in to another account. Click Copy link under \(account.label) in OpenAccs and open it in a private window.")
+        }
+        let reply = try App.call(ControlRequest(.connect, id: account.id))
+        func live(_ a: ControlAccount) -> Bool { a.provider == .claude && !a.needsSignIn && !a.windows.isEmpty }
+        let wasLive = Set(before.filter(live).map(\.id))
+        // Name only the windows that went live, so the line stays true for every account, org and app version.
+        let connected = reply.accounts.filter { live($0) && !wasLive.contains($0.id) }.map(\.label)
+        guard reply.accounts.contains(where: { $0.id == account.id && live($0) }), !connected.isEmpty else {
+            let row = reply.accounts.first { $0.id == account.id }
+            print("Signed in to Claude Code, but no limits came back yet (\(row?.error ?? "no answer yet")).")
+            return
+        }
+        print("Live limits connected for \(windowList(connected))." + (privately ? " Close the private window." : ""))
     }
 
     func rename() throws {
@@ -448,7 +464,7 @@ private struct Command {
       openaccs use --best <provider> [--yes]  the same, for the account with the most left
       openaccs restart <account>              restart a Claude profile so it loads new sessions
       openaccs refresh [--json]               ask every provider now, then show status
-      openaccs connect <account>              exact Claude limits (sign Claude Code in, in the browser)
+      openaccs connect <account>              live Claude limits for that account's windows (one Claude Code sign-in)
       openaccs add claude <name>
       openaccs add codex | grok | grok-bot [<bot account>]
       openaccs add kimi | zai [<key> | -] [--china]
