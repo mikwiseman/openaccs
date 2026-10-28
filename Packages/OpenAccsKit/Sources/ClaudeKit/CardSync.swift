@@ -44,13 +44,13 @@ public struct SyncPlan: Sendable, Hashable {
     public var tombstones: [String]
     /// Chat settings to remember for the next sync; nil when nothing new.
     var records: SyncRecords?
-    /// Folders an open app has loaded whose chats differ from the agreed settings: chats by folder path.
-    /// They catch up when that app restarts.
+    /// What differs in the folders an open app has loaded, by folder path: chats whose settings differ, pins
+    /// (with pin sync) and app settings. They catch up when that app restarts, shown as "N changes".
     public var waiting: [String: Int] = [:]
 
     public var isEmpty: Bool { operations.isEmpty && tombstones.isEmpty && records == nil }
 
-    /// Chats in an open app's folder that wait for a restart to show their pin, mode or other settings.
+    /// Changes in an open app's folder that wait for a restart: chats, pins and app settings.
     public func waiting(in cardsDir: URL) -> Int {
         waiting[cardsDir.standardizedFileURL.path] ?? 0
     }

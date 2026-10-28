@@ -3,9 +3,10 @@ import AppKit
 import OpenAccsCore
 import SetupKit
 
-/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --settings | --setup]` renders the panel
-/// (or an add view, the Settings window or its Setup tab) at 2x to a PNG and exits, without a menu-bar item.
-/// For checking the UI without clicking. A live `--setup` scans this Mac (read only) first.
+/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --connect | --settings | --setup]` renders the
+/// panel (or an add view, the guided connect of the first Claude row without live limits, the Settings window or
+/// its Setup tab) at 2x to a PNG and exits, without a menu-bar item. For checking the UI without clicking. A live
+/// `--setup` scans this Mac (read only) first.
 ///
 /// Draws through an offscreen NSHostingView rather than ImageRenderer, because ImageRenderer
 /// can't draw AppKit-backed controls (text fields come out as placeholders).
@@ -46,7 +47,8 @@ enum Snapshot {
         } else if args.contains("--settings") {
             root = AnyView(SettingsView(model: model, updater: AppUpdater.shared))
         } else {
-            root = AnyView(PanelView(model: model, adding: adding))
+            let connecting = args.contains("--connect") ? model.rows.first { $0.provider == .claude && $0.needsSignIn }?.id : nil
+            root = AnyView(PanelView(model: model, adding: adding, connecting: connecting))
         }
         let host = NSHostingView(rootView: root.background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: 400),

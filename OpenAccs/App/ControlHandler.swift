@@ -57,9 +57,9 @@ final class ControlHandler {
             let id = try row(request.id, claudeOnly: "restart").id
             try await toTheEnd { try await model.restart(id) }
         case .connect:
-            // A browser sign-in: Ctrl-C in the terminal cancels it, like Cancel in the panel.
+            // A browser sign-in: Ctrl-C in the terminal cancels it, like Cancel in the panel. The model refuses
+            // a window whose account it doesn't know yet, one with live limits, and a second sign-in at once.
             let row = try row(request.id, claudeOnly: "connect")
-            guard row.canConnectLimits || row.needsSignIn else { throw Failure("\(row.label) already has exact limits.") }
             try await model.connectExactLimits(row.id)
         case .rename:
             let name = request.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

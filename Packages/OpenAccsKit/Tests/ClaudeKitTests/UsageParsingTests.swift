@@ -11,86 +11,6 @@ private func iso(_ string: String) -> Date {
     ISO8601DateFormatter().date(from: string)!
 }
 
-@Suite struct ClaudeAppUsageTests {
-    let orgA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    let orgB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-
-    @Test func latestSampleOfTheProfilesOrg() throws {
-        let history = """
-            {"version":2,"samples":[
-              {"t":1760950000000,"org":"\(orgA)","u":{"fh":10,"sd":20,"so":30,"sn":40}},
-              {"t":1760960000000,"org":"\(orgA)","u":{"fh":12.5,"sd":22,"so":33,"sn":44,"oa":1,"cw":2,"om":3,"op":4,"xu":5}},
-              {"t":1760955000000,"org":"\(orgA)","u":{"fh":11}},
-              {"t":1760990000000,"org":"\(orgB)","u":{"fh":90,"sd":91}}
-            ]}
-            """
-        let usage = try #require(ClaudeAppUsage.parse(Data(history.utf8), org: orgA))
-
-        #expect(usage.asOf == Date(timeIntervalSince1970: 1_760_960_000))
-        #expect(usage.source == "Claude app")
-        #expect(usage.windows == [
-            UsageWindow(kind: .fiveHour, usedPercent: 12.5),
-            UsageWindow(kind: .weekly, usedPercent: 22),
-            UsageWindow(kind: .weekly, label: "Opus", usedPercent: 33),
-            UsageWindow(kind: .weekly, label: "Sonnet", usedPercent: 44),
-        ])
-        #expect(usage.window(.fiveHour)?.resetsAt == nil)
-
-        let other = try #require(ClaudeAppUsage.parse(Data(history.utf8), org: orgB))
-        #expect(other.windows == [UsageWindow(kind: .fiveHour, usedPercent: 90), UsageWindow(kind: .weekly, usedPercent: 91)])
-        #expect(other.asOf == Date(timeIntervalSince1970: 1_760_990_000))
-    }
-
-    @Test func readsTheProfilesHistoryFile() throws {
-        let home = try TempHome()
-        let profile = ClaudeProfile(dataDir: home.url.appending(path: "Data", directoryHint: .isDirectory), isDefault: false, accountUuid: "a", orgUuid: orgA)
-        #expect(ClaudeAppUsage.read(profiles: [profile]) == nil)
-        try home.write("Data/plan-usage-history.json", #"{"version":2,"samples":[{"t":1760960000000,"org":"\#(orgA)","u":{"fh":7,"sd":8}}]}"#)
-        #expect(ClaudeAppUsage.read(profiles: [profile])?.window(.weekly)?.usedPercent == 8)
-        #expect(ClaudeAppUsage.read(profiles: []) == nil)
-    }
-
-    @Test func anAccountsNewestNumbersComeFromWhicheverOfItsWindowsSavedThemLast() throws {
-        let home = try TempHome()
-        // One account in two windows: one closed this morning, the other open and saving its numbers.
-        let closed = ClaudeProfile(dataDir: home.url.appending(path: "Closed", directoryHint: .isDirectory), isDefault: false, accountUuid: "a", orgUuid: orgA)
-        let open = ClaudeProfile(dataDir: home.url.appending(path: "Open", directoryHint: .isDirectory), isDefault: true, accountUuid: "a", orgUuid: orgA)
-        try home.write("Closed/plan-usage-history.json", #"{"version":2,"samples":[{"t":1760960000000,"org":"\#(orgA)","u":{"fh":0,"sd":0}}]}"#)
-        try home.write("Open/plan-usage-history.json", """
-            {"version":2,"samples":[{"t":1760990000000,"org":"\(orgA)","u":{"fh":100,"sd":24}},{"t":1760995000000,"org":"\(orgB)","u":{"fh":5,"sd":5}}]}
-            """)
-
-        for order in [[closed, open], [open, closed]] {
-            let usage = try #require(ClaudeAppUsage.read(profiles: order))
-            #expect(usage.asOf == Date(timeIntervalSince1970: 1_760_990_000))
-            #expect(usage.windows == [UsageWindow(kind: .fiveHour, usedPercent: 100), UsageWindow(kind: .weekly, usedPercent: 24)])
-        }
-        // Another org's newer sample in the same file is never this account's.
-        #expect(ClaudeAppUsage.read(profiles: [closed])?.window(.weekly)?.usedPercent == 0)
-    }
-
-    @Test func numbersOnlyLastAsLongAsTheirWindow() {
-        let now = Date()
-        func usage(_ age: TimeInterval) -> UsageSnapshot {
-            UsageSnapshot(windows: [UsageWindow(kind: .fiveHour, usedPercent: 100), UsageWindow(kind: .weekly, usedPercent: 30),
-                                    UsageWindow(kind: .weekly, label: "Opus", usedPercent: 50)],
-                          asOf: now.addingTimeInterval(-age), source: ClaudeAppUsage.source)
-        }
-        #expect(ClaudeAppUsage.current(usage(3600), now: now)?.windows.count == 3)
-        // Five hours on, that window has started over at least once: its number says nothing anymore.
-        #expect(ClaudeAppUsage.current(usage(5 * 3600 + 1), now: now)?.windows.map(\.kind) == [.weekly, .weekly])
-        #expect(ClaudeAppUsage.current(usage(7 * 86400 + 1), now: now) == nil)
-    }
-
-    @Test func emptyOrGarbledIsNil() {
-        for text in ["", "garbled{", "[]", "{}", #"{"version":2}"#, #"{"version":2,"samples":[]}"#,
-                     #"{"samples":[{"t":1760960000000,"org":"x"}]}"#, #"{"samples":[{"t":1760960000000,"u":{"oa":1}}]}"#,
-                     #"{"samples":[{"u":{"fh":1}}]}"#, #"{"samples":"no"}"#] {
-            #expect(ClaudeAppUsage.parse(Data(text.utf8), org: orgA) == nil, "\(text)")
-        }
-    }
-}
-
 @Suite struct ClaudeCodeUsageTests {
     let now = Date(timeIntervalSince1970: 1_760_970_000)
 
@@ -190,25 +110,21 @@ private func iso(_ string: String) -> Date {
         #expect(cli.executable()?.path == installed.resolvingSymlinksInPath().path)
     }
 
-    @Test func signInPassesOnTheLinkItOpens() async throws {
+    @Test func signInHandsOverItsLinkOnce() async throws {
         let home = try TempHome()
-        // A stand-in for Anthropic's CLI: opens its sign-in link through $BROWSER, then finishes.
+        // A stand-in for Anthropic's CLI: hands its sign-in link to $BROWSER, waits for the browser, then finishes.
         let fake = try home.write(".local/bin/claude", """
         #!/bin/sh
         "$BROWSER" 'https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5%2Fcallback&login_hint=a%40b.c'
         sleep 1
         """)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-        var cli = ClaudeCodeCLI(paths: home.paths)
-        cli.opener = "/usr/bin/true"   // never a real browser in tests
-        let link = Flag()
+        let cli = ClaudeCodeCLI(paths: home.paths)
         let seen = LinkHolder()
-        try await cli.login(configDir: cli.configDir(for: UUID()), email: "a@b.c") { url in
-            seen.url = url
-            link.set()
-        }
-        #expect(link.isSet)
-        #expect(seen.url?.absoluteString.hasPrefix("https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost") == true)
+        try await cli.login(configDir: cli.configDir(for: UUID()), email: "a@b.c") { url in seen.add(url) }
+        // The helper only writes the link down; OpenAccs opens it, so it must arrive exactly once.
+        #expect(seen.urls.count == 1)
+        #expect(seen.urls.first?.absoluteString.hasPrefix("https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost") == true)
     }
 
     @Test func configDirAndIdentity() throws {
@@ -216,10 +132,13 @@ private func iso(_ string: String) -> Date {
         let cli = ClaudeCodeCLI(paths: home.paths)
         let id = UUID()
         let dir = cli.configDir(for: id)
-        #expect(dir.path == home.paths.appSupport.path + "/Claude/\(id.uuidString)/Code")
+        // One folder per sign-in, apart from the windows' folders. The CLI names its Keychain item after
+        // this exact string, so a stored path must come back byte for byte.
+        #expect(dir.path == home.paths.appSupport.path + "/Claude Code/\(id.uuidString)")
         #expect(cli.environment(dir)["CLAUDE_CONFIG_DIR"] == dir.path)
+        #expect(cli.environment(URL(filePath: dir.path, directoryHint: .isDirectory))["CLAUDE_CONFIG_DIR"] == dir.path)
         #expect(cli.identity(configDir: dir) == nil)
-        try home.writeJSON("Library/Application Support/OpenAccs/Claude/\(id.uuidString)/Code/.claude.json", [
+        try home.writeJSON("Library/Application Support/OpenAccs/Claude Code/\(id.uuidString)/.claude.json", [
             "oauthAccount": [
                 "emailAddress": "work@example.com", "organizationName": "Example",
                 "accountUuid": "11111111-1111-4111-8111-111111111111", "organizationUuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -227,16 +146,119 @@ private func iso(_ string: String) -> Date {
             "userID": "x",
         ])
         #expect(cli.identity(configDir: dir) == ClaudeCLIIdentity(
-            email: "work@example.com", organization: "Example", accountUuid: "11111111-1111-4111-8111-111111111111"
+            email: "work@example.com", organization: "Example", accountUuid: "11111111-1111-4111-8111-111111111111",
+            organizationUuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         ))
+    }
+
+    let a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222"
+    let c = "33333333-3333-4333-8333-333333333333"
+    let o = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", p = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+    /// A Claude Code folder under the test home, signed in as `account` (nil: a sign-in that never finished).
+    func signedIn(_ home: TempHome, _ name: String, _ account: [String: String]?) throws -> String {
+        var json: [String: Any] = ["userID": "x"]
+        if let account { json["oauthAccount"] = account }
+        try home.writeJSON("Library/Application Support/OpenAccs/Claude Code/\(name)/.claude.json", json)
+        return home.paths.appSupport.appending(path: "Claude Code/\(name)", directoryHint: .notDirectory).path
+    }
+
+    func key(_ account: String, _ org: String) throws -> ClaudeAccountKey {
+        try #require(ClaudeAccountKey(account: account, org: org))
+    }
+
+    @Test func eachAccountUsesTheFirstFolderSignedInToIt() throws {
+        let home = try TempHome()
+        let cli = ClaudeCodeCLI(paths: home.paths)
+        let d1 = try signedIn(home, "D1", ["accountUuid": a, "organizationUuid": o.uppercased(), "emailAddress": "a@example.com"])
+        let d2 = try signedIn(home, "D2", nil)
+        let d3 = try signedIn(home, "D3", ["accountUuid": b, "organizationUuid": o])
+        let d4 = try signedIn(home, "D4", ["accountUuid": a, "organizationUuid": o])
+        let d5 = try signedIn(home, "D5", ["accountUuid": a])
+        let missing = home.paths.appSupport.appending(path: "Claude Code/gone", directoryHint: .notDirectory).path
+        let (ao, bo, co, ap) = (try key(a, o), try key(b, o), try key(c, o), try key(a, p))
+
+        // The first folder signed in to an account serves it, whichever window stored it; an unfinished
+        // sign-in or a folder that's gone serves nobody.
+        #expect(cli.signIns([missing, d2, d1, d3, d4], for: [ao, bo, co]) == [ao: d1, bo: d3])
+        // A CLI that names no organization counts for its account in any of them.
+        #expect(cli.signIns([d5], for: [ao, ap]) == [ao: d5, ap: d5])
+        #expect(cli.signIns([], for: [ao]).isEmpty)
+        // A folder Claude Code says is signed out gives way to another folder of its account, and serves only alone.
+        #expect(cli.signIns([d1, d4], for: [ao], signedOut: [d1]) == [ao: d4])
+        #expect(cli.signIns([d1], for: [ao], signedOut: [d1]) == [ao: d1])
+    }
+
+    @Test func aNewSignInReplacesEveryEarlierOneOfItsAccount() throws {
+        let home = try TempHome()
+        let cli = ClaudeCodeCLI(paths: home.paths)
+        let oldA = try signedIn(home, "oldA", ["accountUuid": a, "organizationUuid": o])
+        let oldB = try signedIn(home, "oldB", ["accountUuid": b, "organizationUuid": o])
+        let who = ClaudeCLIIdentity(email: "a@example.com", organization: "Example", accountUuid: a.uppercased(), organizationUuid: o)
+        let w = (0..<7).map { _ in UUID() }
+        let (ao, bo, ap) = (try key(a, o), try key(b, o), try key(a, p))
+        let windows: [(id: UUID, key: ClaudeAccountKey?, dir: String?)] = [
+            (w[0], ao, nil), (w[1], ao, oldA), (w[2], bo, oldA), (w[3], bo, nil), (w[4], ap, nil), (w[5], nil, nil), (w[6], bo, oldB),
+        ]
+        // Every window showing that account and org, plus a window that moved on but still holds the
+        // account's old folder; never another account's windows, another org, or a window of unknown account.
+        #expect(cli.sharing(who, among: windows) == [w[0], w[1], w[2]])
+        #expect(who.matches(ao) && !who.matches(ap) && !who.matches(bo))
+    }
+
+    @Test func privateWindowsOfTheDefaultBrowser() {
+        for id in ["com.google.Chrome", "com.google.Chrome.canary", "com.brave.Browser", "com.brave.browser",
+                   "com.brave.Browser.origin", "org.chromium.Chromium"] {
+            #expect(ClaudeCodeCLI.privateWindowFlag(browser: id) == "--incognito", "\(id)")
+        }
+        for id in ["com.microsoft.edgemac", "com.microsoft.edgemac.Dev"] {
+            #expect(ClaudeCodeCLI.privateWindowFlag(browser: id) == "--inprivate", "\(id)")
+        }
+        for id in ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly"] {
+            #expect(ClaudeCodeCLI.privateWindowFlag(browser: id) == "--private-window", "\(id)")
+        }
+        for id in ["com.apple.Safari", "company.thebrowser.Browser", "com.google.chromeremotedesktop", ""] {
+            #expect(ClaudeCodeCLI.privateWindowFlag(browser: id) == nil, "\(id)")
+        }
     }
 }
 
 private final class LinkHolder: @unchecked Sendable {
     private let lock = NSLock()
-    private var value: URL?
-    var url: URL? {
-        get { lock.withLock { value } }
-        set { lock.withLock { value = newValue } }
+    private var seen: [URL] = []
+    func add(_ url: URL) { lock.withLock { seen.append(url) } }
+    var urls: [URL] { lock.withLock { seen } }
+}
+
+@Suite struct ClaudeLimitsTests {
+    let now = Date(timeIntervalSince1970: 1_760_970_000)
+
+    func answer(_ age: TimeInterval) -> UsageSnapshot {
+        UsageSnapshot(plan: "Max", windows: [UsageWindow(kind: .fiveHour, usedPercent: 40, resetsAt: now.addingTimeInterval(3600))],
+                      asOf: now.addingTimeInterval(-age), source: "Claude Code")
+    }
+
+    func row(account: Bool = true, signIn: Bool = true, answer: UsageSnapshot? = nil, problem: UsageError? = nil) -> ClaudeLimits.Row {
+        ClaudeLimits.row(account: account, signIn: signIn, answer: answer, problem: problem, now: now)
+    }
+
+    @Test func liveForHalfAnHourElseOneLineWhy() {
+        let fresh = answer(10 * 60)
+        #expect(row(account: false, answer: fresh) == ClaudeLimits.Row(usage: nil, note: "Open this window once to connect live limits", connect: false))
+        #expect(row(signIn: false, answer: fresh) == ClaudeLimits.Row(usage: nil, note: "No live limits", connect: true))
+        #expect(row(answer: fresh) == ClaudeLimits.Row(usage: fresh, note: nil, connect: false))
+        // One failed ask doesn't end numbers that are still young.
+        #expect(row(answer: fresh, problem: .unexpected("Claude Code did not answer")) == ClaudeLimits.Row(usage: fresh, note: nil, connect: false))
+        // Signed out ends them at once.
+        #expect(row(answer: answer(2 * 60), problem: .needsSignIn) == ClaudeLimits.Row(usage: nil, note: "Limits signed out", connect: true))
+        // Live for 30 minutes, not a second longer.
+        #expect(row(answer: answer(30 * 60 - 1)).usage != nil)
+        #expect(row(answer: answer(30 * 60)).usage == nil)
+        #expect(row(answer: answer(31 * 60), problem: .unexpected("Claude Code did not answer"))
+                == ClaudeLimits.Row(usage: nil, note: "Claude Code did not answer", connect: true))
+        #expect(row(problem: .unexpected("Claude Code is not installed")) == ClaudeLimits.Row(usage: nil, note: "Claude Code is not installed", connect: true))
+        // Connected and about to be asked (just launched, or awake after a sleep): nothing to say yet.
+        #expect(row(answer: answer(8 * 3600)) == ClaudeLimits.Row(usage: nil, note: nil, connect: false))
+        #expect(row() == ClaudeLimits.Row(usage: nil, note: nil, connect: false))
     }
 }

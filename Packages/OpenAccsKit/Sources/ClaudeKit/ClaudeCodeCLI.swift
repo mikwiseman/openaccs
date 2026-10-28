@@ -5,16 +5,29 @@ import OpenAccsCore
 public struct ClaudeCLIIdentity: Sendable, Hashable {
     public var email: String?
     public var organization: String?
-    /// Compare with the profile's account: the browser may sign the CLI in to a different one.
+    /// Compare with the window's account: the browser may sign the CLI in to a different one.
     public var accountUuid: String?
+    public var organizationUuid: String? = nil
+
+    /// Signed in to that account, and to that org when the CLI names one.
+    public func matches(_ key: ClaudeAccountKey) -> Bool {
+        guard accountUuid?.lowercased() == key.account else { return false }
+        return organizationUuid.map { $0.lowercased() == key.org } ?? true
+    }
+
+    /// The same account, and the same org when both name one.
+    func isSame(as other: ClaudeCLIIdentity) -> Bool {
+        guard let account = accountUuid?.lowercased(), account == other.accountUuid?.lowercased() else { return false }
+        guard let org = organizationUuid?.lowercased(), let otherOrg = other.organizationUuid?.lowercased() else { return true }
+        return org == otherOrg
+    }
 }
 
-/// Exact Claude limits through Anthropic's unmodified `claude` CLI, signed in once per account in an
-/// OpenAccs-owned CLAUDE_CONFIG_DIR. OpenAccs never reads the CLI's credentials; it only asks the CLI.
+/// Live Claude limits through Anthropic's unmodified `claude` CLI, signed in once per account and org in an
+/// OpenAccs-owned CLAUDE_CONFIG_DIR. OpenAccs never reads the CLI's credentials. It only asks the CLI, and
+/// reads the account and org in that folder's `.claude.json` to know whose numbers they are.
 public struct ClaudeCodeCLI: Sendable {
     public let paths: Paths
-    /// Opens the sign-in link in the default browser.
-    var opener = "/usr/bin/open"
 
     public init(paths: Paths) { self.paths = paths }
 
@@ -44,16 +57,16 @@ public struct ClaudeCodeCLI: Sendable {
             && FileManager.default.isExecutableFile(atPath: url.path)
     }
 
-    /// `<appSupport>/Claude/<id>/Code`, no trailing slash (the CLI names its keychain item after this exact string).
-    public func configDir(for accountID: UUID) -> URL {
-        paths.claudeProfilesDir.appending(path: "\(accountID.uuidString)/Code", directoryHint: .notDirectory)
+    /// `<appSupport>/Claude Code/<id>`: a new folder for each sign-in, with no trailing slash. The CLI names its
+    /// Keychain item after this exact string, so a stored path is used verbatim forever.
+    public func configDir(for signIn: UUID) -> URL {
+        paths.claudeSignInsDir.appending(path: signIn.uuidString, directoryHint: .notDirectory)
     }
 
-    /// Runs Anthropic's own sign-in (`claude auth login --claudeai`) for that config dir and waits up to
-    /// 10 minutes. The CLI opens its link through `$BROWSER`: a small helper opens it in the default browser as
-    /// usual and hands it to `onLink`, because the sign-in finishes in whichever window opens it. A browser
-    /// signed in to claude.ai as another account can't finish it (claude.ai says "Unable to access Claude
-    /// Code"); a private window can.
+    /// Runs Anthropic's own sign-in (`claude auth login --claudeai`) in that folder and waits up to 10 minutes.
+    /// The CLI hands its link to `$BROWSER`: a small helper only writes it down, and `onLink` gets it once,
+    /// while the CLI waits, so the caller opens it (in a private window when it can). A browser signed in to
+    /// claude.ai as another account can't finish it (claude.ai says "Unable to access Claude Code").
     public func login(configDir: URL, email: String?, onLink: @escaping @Sendable (URL) -> Void = { _ in }) async throws {
         guard let claude = executable() else { throw ProcessError.notFound("claude") }
         try FS.makeDirectory(configDir)
@@ -64,8 +77,7 @@ public struct ClaudeCodeCLI: Sendable {
         try FS.makeDirectory(scratch)
         defer { try? FileManager.default.removeItem(at: scratch) }
         let link = scratch.appending(path: "link"), helper = scratch.appending(path: "open")
-        try AtomicFile.write(Data("#!/bin/sh\nprintf '%s' \"$1\" > \(Self.quoted(link.path))\nexec \(Self.quoted(opener)) \"$1\"\n".utf8),
-                             to: helper, permissions: 0o700)
+        try AtomicFile.write(Data("#!/bin/sh\nprintf '%s' \"$1\" > \(Self.quoted(link.path))\n".utf8), to: helper, permissions: 0o700)
         let watch = Task {
             while !Task.isCancelled {
                 if let text = try? String(contentsOf: link, encoding: .utf8), let url = URL(string: text), url.scheme == "https" {
@@ -81,12 +93,8 @@ public struct ClaudeCodeCLI: Sendable {
         let result = try await ProcessRunner.run(
             claude, arguments, environment: environment, currentDirectory: try neutralDirectory(), timeout: .seconds(600)
         )
+        // No link after the CLI exits: nobody listens for its sign-in anymore.
         guard result.status == 0 else { throw ProcessError.failed("claude auth login", result.status, result.stderrString) }
-        // A sign-in that finished faster than the watch looked still has its link.
-        if !watch.isCancelled, let text = try? String(contentsOf: link, encoding: .utf8), let url = URL(string: text), url.scheme == "https" {
-            watch.cancel()
-            onLink(url)
-        }
     }
 
     /// For a POSIX shell: single quotes, with any single quote spelled out.
@@ -100,8 +108,43 @@ public struct ClaudeCodeCLI: Sendable {
               let account = JSON.object(data)?["oauthAccount"] as? [String: Any] else { return nil }
         return ClaudeCLIIdentity(
             email: account["emailAddress"] as? String, organization: account["organizationName"] as? String,
-            accountUuid: account["accountUuid"] as? String
+            accountUuid: account["accountUuid"] as? String, organizationUuid: account["organizationUuid"] as? String
         )
+    }
+
+    /// Per account and org, the first of `dirs` whose CLI is signed in to it, returned exactly as given
+    /// (the CLI names its Keychain item after the exact string). A folder in `signedOut` serves only when its
+    /// account has no other. Reads each folder's `.claude.json` once.
+    public func signIns(_ dirs: [String], for keys: Set<ClaudeAccountKey>, signedOut: Set<String> = []) -> [ClaudeAccountKey: String] {
+        var result: [ClaudeAccountKey: String] = [:], read = Set<String>()
+        for dir in dirs.filter({ !signedOut.contains($0) }) + dirs.filter({ signedOut.contains($0) }) where read.insert(dir).inserted {
+            guard let who = identity(configDir: URL(filePath: dir, directoryHint: .isDirectory)) else { continue }
+            for key in keys where result[key] == nil && who.matches(key) { result[key] = dir }
+        }
+        return result
+    }
+
+    /// The windows a new sign-in as `who` goes to: every window showing that account and org, plus every
+    /// window still holding an older folder signed in to it, so the account keeps exactly one folder.
+    public func sharing(_ who: ClaudeCLIIdentity, among windows: [(id: UUID, key: ClaudeAccountKey?, dir: String?)]) -> [UUID] {
+        windows.filter { window in
+            if let key = window.key, who.matches(key) { return true }
+            guard let dir = window.dir, let held = identity(configDir: URL(filePath: dir, directoryHint: .isDirectory)) else { return false }
+            return held.isSame(as: who)
+        }.map(\.id)
+    }
+
+    /// The switch that opens a link in a private window of that browser (by bundle id). nil when OpenAccs
+    /// knows none: Safari and the rest open the link normally.
+    public static func privateWindowFlag(browser bundleID: String) -> String? {
+        let id = bundleID.lowercased()
+        let flags = [
+            ("com.google.chrome", "--incognito"), ("com.brave.browser", "--incognito"), ("org.chromium.chromium", "--incognito"),
+            ("com.microsoft.edgemac", "--inprivate"),
+            ("org.mozilla.firefox", "--private-window"), ("org.mozilla.firefoxdeveloperedition", "--private-window"),
+            ("org.mozilla.nightly", "--private-window"),
+        ]
+        return flags.first { id == $0.0 || id.hasPrefix($0.0 + ".") }?.1
     }
 
     /// Asks the CLI for plan limits (`get_usage` control request over stream-json). Never sends a prompt.

@@ -226,6 +226,9 @@ private let finished = [
         #expect(UsageSnapshot.with([reset], on: old, now: now)?.window(.fiveHour)?.usedPercent == 0)
         let after = UsageSnapshot(windows: [UsageWindow(kind: .fiveHour, usedPercent: 20)], asOf: now, source: "Claude app")
         #expect(UsageSnapshot.with([reset], on: after, now: now) == after)
+        // Without numbers, a limit that already came back says nothing (never a lasting "100% left").
+        #expect(UsageSnapshot.with([reset], on: nil, now: now) == nil)
+        #expect(UsageSnapshot.with([reset, hit], on: nil, now: now)?.windows == [UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: hit.resetsAt)])
     }
 
     @Test func onlyThisWindowsChatsCount() throws {

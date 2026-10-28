@@ -43,10 +43,11 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
     public var source: String?
     /// Why usage is missing or may be wrong. nil when fine.
     public var error: String?
+    /// Signed out. Claude: no live limits, which `openaccs connect` fixes.
     public var needsSignIn: Bool
     /// Claude: sessions from other profiles this open profile hasn't loaded yet.
     public var pendingSessions: Int
-    /// Claude: chats whose pin or settings changed in another profile, loaded on its next restart.
+    /// Claude: chats, pins and app settings that differ from the other windows', loaded on its next restart.
     public var pendingChanges: Int
     /// ✦ in the panel: the most left among this provider's accounts.
     public var best: Bool
@@ -140,14 +141,14 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
 }
 
 extension ControlAccount {
-    /// What an open Claude window loads on its next restart: "3 new sessions", "2 chats changed" or
-    /// "3 new sessions, 2 changed". nil when nothing waits.
+    /// What an open Claude window loads on its next restart: "3 new sessions", "4 changes" or
+    /// "3 new sessions, 2 changed". A change is a chat, a pin or an app setting. nil when nothing waits.
     public static func pendingText(new: Int, changed: Int) -> String? {
         let sessions = new == 1 ? "1 new session" : "\(new) new sessions"
         switch (new > 0, changed > 0) {
         case (true, true): return "\(sessions), \(changed) changed"
         case (true, false): return sessions
-        case (false, true): return changed == 1 ? "1 chat changed" : "\(changed) chats changed"
+        case (false, true): return changed == 1 ? "1 change" : "\(changed) changes"
         case (false, false): return nil
         }
     }
