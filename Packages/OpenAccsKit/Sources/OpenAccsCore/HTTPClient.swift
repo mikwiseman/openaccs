@@ -13,7 +13,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         config.timeoutIntervalForRequest = 20
         config.httpCookieStorage = nil
         config.urlCache = nil
-        session = URLSession(configuration: config)
+        session = URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
     }
 
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
@@ -24,6 +24,16 @@ public struct URLSessionHTTPClient: HTTPClient {
         } catch let error as URLError {
             throw UsageError.network(error.localizedDescription)
         }
+    }
+}
+
+/// Provider endpoints are exact. In particular, URLSession otherwise forwards a manually set
+/// Cookie header across origins even when it strips Authorization.
+private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }
 

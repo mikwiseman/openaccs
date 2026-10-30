@@ -261,8 +261,12 @@ public struct ClaudeProfiles: Sendable {
 
     func dataDir(fromArguments args: [String]) -> URL {
         let prefix = "--user-data-dir="
-        guard let arg = args.dropFirst().last(where: { $0.hasPrefix(prefix) }) else { return paths.claudeDefaultDataDir }
-        var value = String(arg.dropFirst(prefix.count))
+        var directory: String?
+        for i in args.indices.dropFirst() {
+            if args[i].hasPrefix(prefix) { directory = String(args[i].dropFirst(prefix.count)) }
+            else if args[i] == "--user-data-dir", args.indices.contains(i + 1) { directory = args[i + 1] }
+        }
+        guard var value = directory else { return paths.claudeDefaultDataDir }
         if value.count >= 2, value.first == "\"", value.last == "\"" { value = String(value.dropFirst().dropLast()) }
         if value.hasPrefix("~/") { value = paths.home.path + value.dropFirst() }
         guard !value.isEmpty else { return paths.claudeDefaultDataDir }

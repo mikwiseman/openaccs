@@ -8,7 +8,7 @@ struct AccountRow: View {
     let now: Date
     /// Scrolls the list so this whole row shows, with the question it just opened.
     let reveal: () -> Void
-    /// Claude: the guided connect for this window's account. Others: the add flow again (expired login or key).
+    /// Reopen sign-in for an expired account or API key.
     let signIn: (PanelRow) -> Void
 
     @State private var hovering = false
@@ -22,13 +22,11 @@ struct AccountRow: View {
     @State private var pulse = 0
     @FocusState private var nameFocused: Bool
 
-    enum Confirm { case switchCodex, restartClaude, remove }
+    enum Confirm { case restartClaude, remove }
 
     private var color: Color { AccountColor.color(row.color) }
     private var meters: [UsageWindow] { UsageText.meters(row.usage) }
     private var staleNote: String? { row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
-    /// Optional live polling, tucked into the account menu while desktop measurements stay visible.
-    private var offersConnect: Bool { row.provider == .claude && !row.isLive && row.limitsGroup != nil && row.signInLink == nil }
 
     /// Meters and captions start under the label, not under the dot.
     static let indent: CGFloat = 18
@@ -65,17 +63,13 @@ struct AccountRow: View {
         .onHover { hovering = $0 }
         .contextMenu { menu }
         .onChange(of: row.state) { old, new in if old == .idle && new != .idle { pulse += 1 } }
-        // Live limits arrived, from the panel or a terminal sign-in.
-        .onChange(of: row.isLive) { old, new in if !old && new { pulse += 1 } }
+        .onChange(of: row.usage?.asOf) { _, _ in pulse += 1 }
         .onChange(of: confirm) { _, new in if new != nil { reveal() } }
         .animation(.snappy(duration: 0.22), value: confirm)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, tap)
-        .accessibilityActions {
-            if offersConnect { Button("Connect live limits") { signIn(row) } }
-        }
     }
 
     // MARK: Parts
@@ -155,7 +149,7 @@ struct AccountRow: View {
     private var status: String? {
         switch row.provider {
         case .claude: row.state == .running ? "Open" : "Closed"
-        case .codex: row.state == .active ? "Active" : nil
+        case .codex: row.state == .idle ? "Closed" : "Open"
         case .grok, .kimi, .zai: nil
         }
     }
@@ -176,25 +170,15 @@ struct AccountRow: View {
             HStack(spacing: 0) {
                 Text(signedOutNote).foregroundStyle(.orange).allowsHitTesting(false)
                 separator
-                Button(usesKey ? "Replace key" : "Sign in") { signIn(row) }
+                Button(usesKey ? "Replace key" : "Sign in") {
+                    if row.provider == .codex { tap() } else { signIn(row) }
+                }
                     .buttonStyle(.inlineLink)
             }
             .captionStyle()
         } else {
             let notes = notes
-            // An explicitly started sign-in keeps its browser link available until it finishes.
-            let limitsLine = row.provider == .claude && row.signInLink != nil
-            if limitsLine {
-                HStack(spacing: 0) {
-                    if let link = row.signInLink {
-                        Text("Signing in to Claude Code").foregroundStyle(.secondary).allowsHitTesting(false)
-                        separator
-                        CopyLinkButton(link: link)
-                    }
-                }
-                .captionStyle()
-            }
-            let error = limitsLine ? nil : row.error
+            let error = row.error
             if !notes.isEmpty || error != nil {
                 HStack(spacing: 0) {
                     if let error {
@@ -235,7 +219,7 @@ struct AccountRow: View {
         if let n = usage.resetsAvailable, n > 0 { parts.append(UsageText.resets(n)) }
         if let c = usage.credits { parts.append(UsageText.credits(c)) }
         if usage.source == "Claude app" {
-            parts.append("Claude · " + UsageText.updated(usage.asOf, now: now))
+            parts.append(UsageText.updated(usage.asOf, now: now))
         } else if let staleNote { parts.append(staleNote) }
         return parts.joined(separator: "  ·  ")
     }
@@ -244,20 +228,17 @@ struct AccountRow: View {
     private var removalNote: String {
         switch row.provider {
         case .claude: "OpenAccs forgets it. The Claude profile and its history stay on disk."
-        case .codex where row.state == .active: "OpenAccs stops showing it. Codex stays signed in."
-        case .codex: "OpenAccs deletes its saved sign-in for this account. Adding it back needs a browser sign-in."
+        case .codex: "OpenAccs forgets it. Its Codex profile and history stay on disk."
         case .grok, .kimi, .zai: "OpenAccs forgets this account and its saved key."
         }
     }
 
     private func confirmation(_ kind: Confirm) -> some View {
         let title = switch kind {
-        case .switchCodex: "Restart Codex as \(row.label)?"
         case .restartClaude: "Restart \(row.label)?"
         case .remove: "Remove \(row.label) from OpenAccs?"
         }
         let note = switch kind {
-        case .switchCodex: "Codex quits and reopens on this account. Your local history stays."
         case .restartClaude: "This closes its window and running tasks. Finish any work there first."
         case .remove: removalNote
         }
@@ -278,9 +259,7 @@ struct AccountRow: View {
                     .keyboardShortcut(.cancelAction)
                 Button(kind == .remove ? "Remove" : "Restart") {
                     confirm = nil
-                    if kind == .switchCodex {
-                        run("Restarting Codex…") { try await model.open(row.id) }
-                    } else if kind == .restartClaude {
+                    if kind == .restartClaude {
                         restart()
                     } else {
                         model.remove(row.id)
@@ -298,7 +277,6 @@ struct AccountRow: View {
 
     @ViewBuilder private var menu: some View {
         Button(row.provider == .claude ? (row.state == .running ? "Show window" : "Open Claude") : row.provider == .codex ? "Open Codex" : "View usage", action: tap)
-        if offersConnect { Button("Connect live limits…") { signIn(row) } }
         if row.provider == .claude && row.state == .running {
             if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) {
                 Text("\(waiting) waiting for restart")
@@ -330,11 +308,8 @@ struct AccountRow: View {
         guard confirm == nil, !renaming, !busy else { return }
         failure = nil
         switch row.provider {
-        case .codex where row.state != .active:
-            confirm = .switchCodex
         case .claude:
-            let refreshes = row.state == .running && row.pendingSessions + row.pendingChanges > 0
-            run(refreshes ? "Refreshing Claude…" : row.state == .running ? "Switching…" : "Opening Claude…") { try await model.open(row.id) }
+            run(row.state == .running ? "Showing Claude…" : "Opening Claude…") { try await model.open(row.id) }
         default:
             run("Opening…") { try await model.open(row.id) }
         }
@@ -380,8 +355,7 @@ struct AccountRow: View {
         parts.append(row.state == .running ? "open" : row.state == .active ? "active" : "not open")
         if row.isBest { parts.append("most left") }
         for w in meters { parts.append("\(UsageText.spokenWindow(w)), \(UsageText.spoken(w, now: now))") }
-        if row.provider == .claude, row.signInLink != nil { parts.append("Signing in to Claude Code") }
-        else if row.provider == .claude, let error = row.error { parts.append(error) }
+        if row.provider == .claude, let error = row.error { parts.append(error) }
         else if row.needsSignIn { parts.append(signedOutNote + (usesKey ? "" : ", sign in again")) }
         else if let error = row.error { parts.append(error) }
         if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) { parts.append(waiting) }

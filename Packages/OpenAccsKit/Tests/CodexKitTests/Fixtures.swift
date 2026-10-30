@@ -84,6 +84,22 @@ final class FakeApp: CodexAppControl, @unchecked Sendable {
         onLaunch()
     }
 
+    private var profiles: [String: Int32] = [:]
+    private(set) var profileLaunches: [String] = []
+    func processID(home: URL?) -> Int32? {
+        lock.withLock { home.map { profiles[$0.path] } ?? (running ? 1 : nil) }
+    }
+    func open(home: URL?, activate: Bool) async throws -> Int32 {
+        lock.withLock {
+            let key = home?.path ?? "default"
+            if let pid = profiles[key] { return pid }
+            let pid = Int32(profiles.count + 100)
+            profileLaunches.append(key)
+            profiles[key] = pid
+            return pid
+        }
+    }
+
     func restartDaemon() async throws { record("restartDaemon") }
 
     func login(codexHome: URL, timeout: Duration) async throws {

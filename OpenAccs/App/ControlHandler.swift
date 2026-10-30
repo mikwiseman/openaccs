@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import OpenAccsCore
 
@@ -31,7 +32,7 @@ final class ControlHandler {
         for _ in 0..<300 where !model.isReady { try? await Task.sleep(for: .milliseconds(100)) }
         do {
             if request.command == .launch {
-                let id = try row(request.id, claudeOnly: "launch").id
+                let id = try row(request.id).id
                 let result = try await Task { try await model.launch(id) }.value
                 var reply = answer(nil)
                 reply.launch = result
@@ -53,7 +54,9 @@ final class ControlHandler {
     private func perform(_ request: ControlRequest) async throws {
         let model = self.model
         switch request.command {
-        case .status, .launch:
+        case .status:
+            await model.refreshProcessState()
+        case .launch:
             return
         case .refresh:
             await model.refreshNow()
@@ -64,8 +67,7 @@ final class ControlHandler {
             let id = try row(request.id, claudeOnly: "restart").id
             try await toTheEnd { try await model.restart(id) }
         case .connect:
-            // A browser sign-in: Ctrl-C in the terminal cancels it, like Cancel in the panel. The model refuses
-            // a window whose account it doesn't know yet, one with live limits, and a second sign-in at once.
+            // Compatibility alias for older CLI clients; no separate sign-in.
             let row = try row(request.id, claudeOnly: "connect")
             try await model.connectExactLimits(row.id)
         case .rename:
@@ -142,7 +144,19 @@ final class ControlHandler {
         }
         return ControlAccount(id: row.id, provider: row.provider, label: row.label, plan: row.plan, state: state,
                               usage: row.usage, error: row.error, needsSignIn: row.needsSignIn,
-                              pendingSessions: row.pendingSessions, pendingChanges: row.pendingChanges, best: row.isBest)
+                              pendingSessions: row.pendingSessions, pendingChanges: row.pendingChanges, best: row.isBest,
+                              pid: row.pid, windowIDs: windowIDs(for: row.pid))
+    }
+
+    private static func windowIDs(for pid: Int32?) -> [UInt32] {
+        guard let pid, let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        return windows.compactMap { window in
+            guard window[kCGWindowOwnerPID as String] as? Int32 == pid,
+                  window[kCGWindowLayer as String] as? Int == 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  (bounds["Width"] as? Double ?? 0) > 100, (bounds["Height"] as? Double ?? 0) > 100 else { return nil }
+            return window[kCGWindowNumber as String] as? UInt32
+        }.sorted()
     }
 
     private struct Failure: LocalizedError {

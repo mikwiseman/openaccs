@@ -31,6 +31,9 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
     }
 
     public var id: UUID
+    /// Native process and its current main window numbers, for computer-use tools.
+    public var pid: Int32?
+    public var windowIDs: [UInt32]
     public var provider: Provider
     public var label: String
     public var plan: String?
@@ -56,6 +59,8 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
+        pid = try c.decodeIfPresent(Int32.self, forKey: .pid)
+        windowIDs = try c.decodeIfPresent([UInt32].self, forKey: .windowIDs) ?? []
         provider = try c.decode(Provider.self, forKey: .provider)
         label = try c.decode(String.self, forKey: .label)
         plan = try c.decodeIfPresent(String.self, forKey: .plan)
@@ -74,9 +79,12 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
 
     public init(
         id: UUID, provider: Provider, label: String, plan: String? = nil, state: State, usage: UsageSnapshot? = nil,
-        error: String? = nil, needsSignIn: Bool = false, pendingSessions: Int = 0, pendingChanges: Int = 0, best: Bool = false
+        error: String? = nil, needsSignIn: Bool = false, pendingSessions: Int = 0, pendingChanges: Int = 0, best: Bool = false,
+        pid: Int32? = nil, windowIDs: [UInt32] = []
     ) {
         self.id = id
+        self.pid = pid
+        self.windowIDs = windowIDs
         self.provider = provider
         self.label = label
         self.plan = plan

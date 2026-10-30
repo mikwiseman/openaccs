@@ -34,16 +34,16 @@ final class DemoModel: PanelModel {
                 usage: usage("Max", [
                     UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: inMinutes(72)),
                     UsageWindow(kind: .weekly, usedPercent: 85, resetsAt: thu),
-                ], source: "Claude Code"),
-                isLive: true, limitsGroup: "demo-me", hasFolder: true
+                ], source: "Claude"),
+                limitsGroup: "demo-me", hasFolder: true
             ),
             PanelRow(
                 id: UUID(), provider: .claude, label: "work@example.com", color: 1, plan: "Team", state: .running,
                 usage: usage("Team", [
                     UsageWindow(kind: .fiveHour, usedPercent: 2, resetsAt: inMinutes(4 * 60 + 21)),
                     UsageWindow(kind: .weekly, usedPercent: 14, resetsAt: mon),
-                ], minutesAgo: 4, source: "Claude Code"),
-                pendingSessions: 3, isBest: true, isLive: true, limitsGroup: "demo-work", hasFolder: true
+                ], minutesAgo: 4, source: "Claude"),
+                pendingSessions: 3, isBest: true, limitsGroup: "demo-work", hasFolder: true
             ),
             PanelRow(
                 id: UUID(), provider: .codex, label: "me@example.com", color: 2, plan: "Pro", state: .active,
@@ -90,31 +90,31 @@ final class DemoModel: PanelModel {
                     usage: usage("Enterprise", [
                         UsageWindow(kind: .fiveHour, usedPercent: 0, resetsAt: nil),
                         UsageWindow(kind: .weekly, usedPercent: 99.6, resetsAt: thu),
-                    ], credits: Credits(amount: 4.2, currency: "USD", label: "extra usage"), source: "Claude Code"),
-                    isLive: true, limitsGroup: "demo-long", hasFolder: true
+                    ], credits: Credits(amount: 4.2, currency: "USD", label: "extra usage"), source: "Claude"),
+                    limitsGroup: "demo-long", hasFolder: true
                 ),
                 // One account in two windows, not connected yet.
                 PanelRow(
                     id: UUID(), provider: .claude, label: "Side project", color: 5, plan: nil, state: .running,
-                    usage: nil, error: "No live limits", needsSignIn: true, pendingChanges: 3, limitsGroup: "demo-side", hasFolder: true
+                    usage: nil, error: "Sign in inside Claude", needsSignIn: true, pendingChanges: 3, limitsGroup: "demo-side", hasFolder: true
                 ),
                 PanelRow(
                     id: UUID(), provider: .claude, label: "Weekend", color: 2, plan: nil, state: .idle,
-                    usage: nil, error: "No live limits", needsSignIn: true, limitsGroup: "demo-side", hasFolder: true
+                    usage: nil, error: "Sign in inside Claude", needsSignIn: true, limitsGroup: "demo-side", hasFolder: true
                 ),
                 // Not connected, but a chat ran into its 5-hour limit: that one says when it's back.
                 PanelRow(
                     id: UUID(), provider: .claude, label: "night@example.com", color: 7, plan: nil, state: .idle,
-                    usage: usage(nil, [UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: inMinutes(42))], source: "Claude Code"),
-                    error: "No live limits", needsSignIn: true, limitsGroup: "demo-night", hasFolder: true
+                    usage: usage(nil, [UsageWindow(kind: .fiveHour, usedPercent: 100, resetsAt: inMinutes(42))], source: "Claude"),
+                    error: "Sign in inside Claude", needsSignIn: true, limitsGroup: "demo-night", hasFolder: true
                 ),
                 PanelRow(
                     id: UUID(), provider: .claude, label: "Lab", color: 6, plan: "Pro", state: .running,
                     usage: usage("Pro", [
                         UsageWindow(kind: .fiveHour, usedPercent: 64, resetsAt: inMinutes(14)),
                         UsageWindow(kind: .weekly, usedPercent: 100, resetsAt: sat),
-                    ], source: "Claude Code"),
-                    pendingSessions: 1, pendingChanges: 2, isLive: true, limitsGroup: "demo-lab", hasFolder: true
+                    ], source: "Claude"),
+                    pendingSessions: 1, pendingChanges: 2, limitsGroup: "demo-lab", hasFolder: true
                 ),
                 PanelRow(
                     id: UUID(), provider: .claude, label: "Old login", color: 7, plan: nil, state: .idle,
@@ -122,7 +122,7 @@ final class DemoModel: PanelModel {
                 ),
                 PanelRow(
                     id: UUID(), provider: .claude, label: "New window", color: 4, plan: nil, state: .idle,
-                    usage: nil, error: "Open this window once to connect live limits", hasFolder: true
+                    usage: nil, error: "Open this window and sign in", hasFolder: true
                 ),
             ], at: 2)
             rows.append(contentsOf: [
@@ -153,7 +153,7 @@ final class DemoModel: PanelModel {
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         if rows[i].provider == .codex {
             try await Task.sleep(for: .seconds(2))
-            for j in rows.indices where rows[j].provider == .codex { rows[j].state = j == i ? .active : .idle }
+            rows[i].state = .running
         } else if rows[i].provider == .claude {
             rows[i].state = .running
         }
@@ -162,25 +162,6 @@ final class DemoModel: PanelModel {
     func restart(_ id: UUID) async throws {
         try await Task.sleep(for: .seconds(2))
         update(id) { $0.pendingSessions = 0 }
-    }
-
-    func connectExactLimits(_ id: UUID) async throws {
-        update(id) { $0.signInLink = URL(string: "https://claude.com/cai/oauth/authorize?code=true") }
-        defer { update(id) { $0.signInLink = nil } }
-        try await Task.sleep(for: .seconds(3))
-        // Every window of the account goes live from the one sign-in.
-        let group = rows.first { $0.id == id }?.limitsGroup
-        let live = UsageSnapshot(plan: "Max", windows: [
-            UsageWindow(kind: .fiveHour, usedPercent: 18, resetsAt: Date().addingTimeInterval(3 * 3600 + 40 * 60)),
-            UsageWindow(kind: .weekly, usedPercent: 41, resetsAt: Date().addingTimeInterval(4 * 86400)),
-        ], asOf: Date(), source: "Claude Code")
-        for i in rows.indices where rows[i].id == id || (group != nil && rows[i].limitsGroup == group) {
-            rows[i].usage = live
-            rows[i].plan = "Max"
-            rows[i].error = nil
-            rows[i].needsSignIn = false
-            rows[i].isLive = true
-        }
     }
 
     func rename(_ id: UUID, to label: String) { update(id) { $0.label = label } }
@@ -201,7 +182,7 @@ final class DemoModel: PanelModel {
     func addClaude(label: String) async throws {
         try await Task.sleep(for: .seconds(1))
         rows.insert(PanelRow(id: UUID(), provider: .claude, label: label, color: 5, plan: nil, state: .running,
-                             error: "Sign in to Claude in this window to connect live limits", hasFolder: true),
+                             error: "Sign in inside this Claude window", hasFolder: true),
                     at: rows.lastIndex { $0.provider == .claude }.map { $0 + 1 } ?? 0)
     }
 

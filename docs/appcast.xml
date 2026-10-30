@@ -6,6 +6,25 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>OpenAccs</title>
         <item>
+            <title>0.5.0</title>
+            <pubDate>Fri, 30 Oct 2026 10:21:02 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.5.0</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Simpler accounts, limits and setup
+
+- Refresh Claude limits using the sign-in already in Claude. No separate live-limits connection.
+- Keep several Codex accounts open, with shared local chats and configuration.
+- Click an account to return to its existing window. Claude only restarts when you ask.
+- Find the exact account window through process and window IDs in the CLI.
+- A smaller Setup screen and native Liquid Glass controls.
+
+Claude limits may ask once for access to Claude Safe Storage in macOS Keychain. If a refresh fails, the last measurement keeps its original time.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.5.0/OpenAccs-0.5.0.zip" length="5247909" type="application/octet-stream" sparkle:edSignature="8asFK29SiHT/3GzgKu6i3h1VVlFOF6ah8VDPgk1TGw7ES32A/AZ3ENNXxcJ7+gnSvWHdkhteSJNfuDcza7NpDw=="/>
+        </item>
+        <item>
             <title>0.4.5</title>
             <pubDate>Fri, 30 Oct 2026 06:58:49 +0300</pubDate>
             <link>https://github.com/mikwiseman/openaccs</link>
@@ -40,28 +59,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.4/OpenAccs-0.4.4.zip" length="5191456" type="application/octet-stream" sparkle:edSignature="mL3MFO9bZXEMuRXGkBx2DDF/t9gXB1hpG/UvKuFsDVO1NuubHAMWoUmeyqW1+rXZPHmj7KkRfaTrr3GzWLJwDA=="/>
         </item>
-        <item>
-            <title>0.4.3</title>
-            <pubDate>Wed, 28 Oct 2026 08:38:06 +0300</pubDate>
-            <link>https://github.com/mikwiseman/openaccs</link>
-            <sparkle:version>0.4.3</sparkle:version>
-            <sparkle:shortVersionString>0.4.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[OpenAccs now keeps the Claude app's settings the same in every Claude window, and windows of one account show the same limits.
-
-- Windows signed in to the same account show the newest limits that any of them saved. The Claude app saves these numbers only from time to time, so for live limits with reset times, connect exact limits once per account.
-- The Claude app's own settings are the same in every window: its preferences, the permission mode of each folder, how new sessions start (model, effort and fast mode) and the chat MCP servers. When you change one in any window, OpenAccs copies it to the others.
-- The first time, OpenAccs gives every window the settings of your default Claude window and keeps the folder modes set in any of them. When you add a window, it gets the same settings.
-- OpenAccs can change a window's settings only while that window is closed, so an open window gets them when you restart it.
-- OpenAccs leaves the sidebar layout (group by, sort, show) alone, because Claude keeps it per account on its own servers and puts it back at every launch. Set it once in each account.
-- When you sign in to a different account in a window, OpenAccs shows the window under that account right away and copies your chats to it.
-- Setup no longer has a Claude app area, because OpenAccs now keeps those settings the same on its own.
-]]></description>
-            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.3/OpenAccs-0.4.3.zip" length="5070058" type="application/octet-stream" sparkle:edSignature="ugt2WkPMuy6GlRL/rKe1k9mRpVh5xnZoYfulr7jGEQelVSnBHPQciiD//wGHatkDQnb9BRudaaZ8GsMCp7kfCQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: fALVxN8OFuSq360mQqbClyjI5m5KsC+Nbq5h/oGPEbtNeXzLSq8Ee+ixk7rz7XHT2/aL2c0R9se4JVxOnxjsDw==
-length: 5715
+edSignature: k6bub4FjHsQ9evu0TrtUBOE8YykutegsOrKNHHZZyvBYKtUVFIYDhtEI1n568j7U7aWEc1gPQWyP2HE+w4UoCA==
+length: 4945
 -->

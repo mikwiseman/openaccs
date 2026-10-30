@@ -13,7 +13,7 @@ struct SettingsWindow: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag("general")
             SetupView(model: setup)
-                .frame(width: 580, height: 640)
+                .frame(width: 520, height: 440)
                 .tabItem { Label("Setup", systemImage: "square.stack.3d.up") }
                 .tag("setup")
         }
