@@ -196,6 +196,22 @@ private func sync(_ home: TempHome, _ windows: [ClaudeProfile], running: [Claude
 }
 
 @Suite struct AppSettingsTests {
+    @Test func menuBarDefaultsToHiddenAndKeepsAnExplicitChoice() throws {
+        let home = try TempHome()
+        let main = home.window("main", account: mainAccount, isDefault: true)
+        try home.save(main, Settings())
+        let new = home.url.appending(path: "Windows/new/Data", directoryHint: .isDirectory)
+        try AppSettings.seed(new, from: main.dataDir, pins: false)
+        #expect((home.json(at: new.appending(path: "claude_desktop_config.json"))["preferences"] as? [String: Any])?["menuBarEnabled"] as? Bool == false)
+
+        try home.save(main, Settings(menuBar: true))
+        let chosen = try #require(AppSettings.read(main))
+        #expect(AppSettings.agree([chosen], agreed: nil, seen: [:])["menuBarEnabled"] as? Bool == true)
+        let optedIn = home.url.appending(path: "Windows/opted-in/Data", directoryHint: .isDirectory)
+        try AppSettings.seed(optedIn, from: main.dataDir, pins: false)
+        #expect((home.json(at: optedIn.appending(path: "claude_desktop_config.json"))["preferences"] as? [String: Any])?["menuBarEnabled"] as? Bool == true)
+    }
+
     let stoli = ["/code/stoli": "bypassPermissions", "/code/waiwai": "bypassPermissions"]
     let xhigh: [String: Any] = ["effort": "xhigh", "fastMode": true, "modelId": "claude-opus-5-5", "worktree": false]
 
@@ -456,7 +472,7 @@ private func sync(_ home: TempHome, _ windows: [ClaudeProfile], running: [Claude
         try AppSettings.seed(own, from: main.dataDir, pins: false)
         #expect(Set((home.json(at: own.appending(path: "claude_desktop_config.json"))["preferences"] as? [String: Any] ?? [:]).keys) == ["sidebarMode", "menuBarEnabled"])
 
-        // Never over a file that is there, and nothing from a window without one.
+        // Never over a file that is there. Without a source, still hide the menu-bar icon.
         let b = home.window("b", account: otherAccount)
         let bConfig = try home.save(b, Settings())
         let bytes = try Data(contentsOf: bConfig)
@@ -464,6 +480,6 @@ private func sync(_ home: TempHome, _ windows: [ClaudeProfile], running: [Claude
         #expect(try Data(contentsOf: bConfig) == bytes)
         let empty = home.url.appending(path: "Windows/empty/Data", directoryHint: .isDirectory)
         try AppSettings.seed(empty, from: home.url.appending(path: "Windows/none/Data"))
-        #expect(!FS.exists(empty.appending(path: "claude_desktop_config.json")))
+        #expect((home.json(at: empty.appending(path: "claude_desktop_config.json"))["preferences"] as? [String: Any])?["menuBarEnabled"] as? Bool == false)
     }
 }

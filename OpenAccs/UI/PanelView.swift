@@ -139,23 +139,24 @@ struct PanelView: View {
                     Button(provider.displayName) { adding = provider }
                 }
             } label: {
-                Label("Add", systemImage: "plus")
+                Label("Add account", systemImage: "plus")
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
             .buttonStyle(.quiet)
             .fixedSize()
             Spacer()
-            if model.isRefreshing {
+            Button { model.refresh() } label: {
                 Image(systemName: "arrow.trianglehead.2.clockwise")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                    .symbolEffect(.rotate.byLayer, options: .repeat(.continuous))
-                    .accessibilityLabel("Refreshing")
+                    .symbolEffect(.rotate.byLayer, options: .repeat(.continuous), isActive: model.isRefreshing)
             }
+            .buttonStyle(.quiet)
+            .disabled(model.isRefreshing)
+            .help("Refresh limits")
+            .accessibilityLabel(model.isRefreshing ? "Refreshing" : "Refresh limits")
+            .keyboardShortcut("r")
             Menu {
-                Button("Refresh") { model.refresh() }
-                    .keyboardShortcut("r")
                 Button("Setup…") { showSettings("setup") }
                 Button("Settings…") { showSettings("general") }
                     .keyboardShortcut(",")
@@ -164,13 +165,13 @@ struct PanelView: View {
                 Button("Quit OpenAccs") { model.quit() }
                     .keyboardShortcut("q")
             } label: {
-                Image(systemName: "ellipsis")
+                Image(systemName: "gearshape")
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
             .buttonStyle(.quiet)
             .fixedSize()
-            .accessibilityLabel("More")
+            .accessibilityLabel("OpenAccs settings and more")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

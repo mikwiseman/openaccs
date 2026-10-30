@@ -103,8 +103,14 @@ enum UsageText {
 
     /// "updated 2h ago" once numbers are older than 30 minutes (the slowest source asks every 15).
     static func stale(_ asOf: Date, now: Date) -> String? {
+        guard now.timeIntervalSince(asOf) >= 30 * 60 else { return nil }
+        return updated(asOf, now: now)
+    }
+
+    /// Always shown for measurements saved by another app, even when recent.
+    static func updated(_ asOf: Date, now: Date) -> String {
         let minutes = Int(now.timeIntervalSince(asOf) / 60)
-        if minutes < 30 { return nil }
+        if minutes < 1 { return "just updated" }
         if minutes < 60 { return "updated \(minutes)m ago" }
         if minutes < 24 * 60 { return "updated \(minutes / 60)h ago" }
         return "updated " + asOf.formatted(.dateTime.month(.abbreviated).day())

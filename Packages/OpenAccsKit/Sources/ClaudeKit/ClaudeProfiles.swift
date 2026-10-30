@@ -75,7 +75,7 @@ struct ClaudeProcess: Sendable {
 
 /// Starts Claude.app with these arguments; `done` gets the launch error, if any. It may never be called:
 /// for a second Claude instance the system can keep the launch pending long after the window is up.
-typealias ClaudeLaunch = @Sendable (_ app: URL, _ arguments: [String], _ done: @escaping @Sendable (Error?) -> Void) -> Void
+typealias ClaudeLaunch = @Sendable (_ app: URL, _ arguments: [String], _ activate: Bool, _ done: @escaping @Sendable (Error?) -> Void) -> Void
 
 /// Finds, resolves, launches and quits Claude desktop profiles. Never touches a login.
 public struct ClaudeProfiles: Sendable {
@@ -87,17 +87,17 @@ public struct ClaudeProfiles: Sendable {
         self.init(paths: paths, processes: ClaudeProcess.live, launch: Self.liveLaunch)
     }
 
-    init(paths: Paths, processes: @escaping @Sendable () -> [ClaudeProcess], launch: @escaping ClaudeLaunch = { _, _, _ in }) {
+    init(paths: Paths, processes: @escaping @Sendable () -> [ClaudeProcess], launch: @escaping ClaudeLaunch = { _, _, _, _ in }) {
         self.paths = paths
         self.processes = processes
         self.launch = launch
     }
 
-    static let liveLaunch: ClaudeLaunch = { app, arguments, done in
+    static let liveLaunch: ClaudeLaunch = { app, arguments, activate, done in
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         configuration.arguments = arguments
-        configuration.activates = true
+        configuration.activates = activate
         NSWorkspace.shared.openApplication(at: app, configuration: configuration) { _, error in done(error) }
     }
 
@@ -354,16 +354,17 @@ public struct ClaudeProfiles: Sendable {
     /// Brings the profile's Claude forward if it runs, otherwise launches a new instance on its folder.
     /// Never launches a second process on a folder that is in use. Returns the pid.
     @MainActor
-    public func open(_ profile: ClaudeProfile, timeout: Duration = .seconds(60)) async throws -> pid_t {
+    public func open(_ profile: ClaudeProfile, activate: Bool = true, timeout: Duration = .seconds(60)) async throws -> pid_t {
         let path = profile.dataDir.standardizedFileURL.path
         guard let running = runningByPath() else { throw ClaudeLaunchError.alreadyRunning }
         if let process = running[path] {
+            guard activate else { return process.pid }
             guard let app = NSRunningApplication(processIdentifier: process.pid) else { throw ClaudeLaunchError.alreadyRunning }
             app.activate()
             return process.pid
         }
         let failure = LaunchFailure()
-        launch(paths.claudeApp, launchArguments(for: profile)) { failure.error = $0 }
+        launch(paths.claudeApp, launchArguments(for: profile), activate) { failure.error = $0 }
         // Opened = its process is there, not when the launch reports back (that can stay pending).
         let clock = ContinuousClock()
         let deadline = clock.now + timeout

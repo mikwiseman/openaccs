@@ -30,6 +30,13 @@ final class ControlHandler {
         // Right after launch the accounts are still loading, and every command needs them.
         for _ in 0..<300 where !model.isReady { try? await Task.sleep(for: .milliseconds(100)) }
         do {
+            if request.command == .launch {
+                let id = try row(request.id, claudeOnly: "launch").id
+                let result = try await Task { try await model.launch(id) }.value
+                var reply = answer(nil)
+                reply.launch = result
+                return reply
+            }
             try await perform(request)
             return answer(nil)
         } catch is CancellationError {
@@ -46,7 +53,7 @@ final class ControlHandler {
     private func perform(_ request: ControlRequest) async throws {
         let model = self.model
         switch request.command {
-        case .status:
+        case .status, .launch:
             return
         case .refresh:
             await model.refreshNow()

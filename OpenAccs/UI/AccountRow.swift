@@ -22,14 +22,13 @@ struct AccountRow: View {
     @State private var pulse = 0
     @FocusState private var nameFocused: Bool
 
-    enum Confirm { case switchCodex, remove }
+    enum Confirm { case switchCodex, restartClaude, remove }
 
     private var color: Color { AccountColor.color(row.color) }
     private var meters: [UsageWindow] { UsageText.meters(row.usage) }
-    /// Claude numbers are live or an exact limit hit, never old.
-    private var staleNote: String? { row.provider == .claude ? nil : row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
-    /// Claude without live limits: why, and the one way to get them (none while a sign-in already runs).
-    private var offersConnect: Bool { row.provider == .claude && row.needsSignIn && row.signInLink == nil }
+    private var staleNote: String? { row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
+    /// Optional live polling, tucked into the account menu while desktop measurements stay visible.
+    private var offersConnect: Bool { row.provider == .claude && !row.isLive && row.limitsGroup != nil && row.signInLink == nil }
 
     /// Meters and captions start under the label, not under the dot.
     static let indent: CGFloat = 18
@@ -70,7 +69,7 @@ struct AccountRow: View {
         .onChange(of: row.isLive) { old, new in if !old && new { pulse += 1 } }
         .onChange(of: confirm) { _, new in if new != nil { reveal() } }
         .animation(.snappy(duration: 0.22), value: confirm)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, tap)
@@ -125,11 +124,40 @@ struct AccountRow: View {
                 }
             }
             Spacer(minLength: 10)
+            if let status {
+                Text(status)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .padding(.trailing, 6)
+                    .allowsHitTesting(false)
+            }
             if let plan = row.plan {
                 Chip(text: plan).allowsHitTesting(false)
             }
+            Menu { menu } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 24, height: 22)
+                    .contentShape(.rect)
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(busy || renaming)
+            .accessibilityLabel("Actions for \(row.label)")
+            .help("Actions for \(row.label)")
         }
         .frame(height: 18)
+    }
+
+    private var status: String? {
+        switch row.provider {
+        case .claude: row.state == .running ? "Open" : "Closed"
+        case .codex: row.state == .active ? "Active" : nil
+        case .grok, .kimi, .zai: nil
+        }
     }
 
     @ViewBuilder private var caption: some View {
@@ -154,37 +182,23 @@ struct AccountRow: View {
             .captionStyle()
         } else {
             let notes = notes
-            let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges)
-            // A Claude Code sign-in running for this window offers its link for a private window; without live
-            // limits, the row says why and offers the one way to get them.
-            let limitsLine = row.provider == .claude && (offersConnect || row.signInLink != nil)
+            // An explicitly started sign-in keeps its browser link available until it finishes.
+            let limitsLine = row.provider == .claude && row.signInLink != nil
             if limitsLine {
                 HStack(spacing: 0) {
                     if let link = row.signInLink {
                         Text("Signing in to Claude Code").foregroundStyle(.secondary).allowsHitTesting(false)
                         separator
                         CopyLinkButton(link: link)
-                    } else {
-                        Text(row.error ?? "No live limits").foregroundStyle(.secondary).allowsHitTesting(false)
-                        separator
-                        Button("Connect") { signIn(row) }.buttonStyle(.inlineLink)
                     }
                 }
                 .captionStyle()
             }
             let error = limitsLine ? nil : row.error
-            if waiting != nil || !notes.isEmpty || error != nil {
+            if !notes.isEmpty || error != nil {
                 HStack(spacing: 0) {
                     if let error {
                         Text(error).foregroundStyle(.secondary).allowsHitTesting(false)
-                        if waiting != nil || !notes.isEmpty { separator }
-                    }
-                    if let waiting {
-                        Text(waiting)
-                            .foregroundStyle(.secondary)
-                            .allowsHitTesting(false)
-                        Text(" ").allowsHitTesting(false)
-                        Button("Restart", action: restart).buttonStyle(.inlineLink)
                         if !notes.isEmpty { separator }
                     }
                     Text(notes).foregroundStyle(.secondary).allowsHitTesting(false)
@@ -220,7 +234,9 @@ struct AccountRow: View {
         var parts: [String] = []
         if let n = usage.resetsAvailable, n > 0 { parts.append(UsageText.resets(n)) }
         if let c = usage.credits { parts.append(UsageText.credits(c)) }
-        if let staleNote { parts.append(staleNote) }
+        if usage.source == "Claude app" {
+            parts.append("Claude · " + UsageText.updated(usage.asOf, now: now))
+        } else if let staleNote { parts.append(staleNote) }
         return parts.joined(separator: "  ·  ")
     }
 
@@ -235,12 +251,22 @@ struct AccountRow: View {
     }
 
     private func confirmation(_ kind: Confirm) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let title = switch kind {
+        case .switchCodex: "Restart Codex as \(row.label)?"
+        case .restartClaude: "Restart \(row.label)?"
+        case .remove: "Remove \(row.label) from OpenAccs?"
+        }
+        let note = switch kind {
+        case .switchCodex: "Codex quits and reopens on this account. Your local history stays."
+        case .restartClaude: "This closes its window and running tasks. Finish any work there first."
+        case .remove: removalNote
+        }
+        return VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(kind == .switchCodex ? "Restart Codex as \(row.label)?" : "Remove \(row.label)?")
+                Text(title)
                     .font(.system(size: 12, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
-                Text(kind == .switchCodex ? "Codex quits and reopens on this account. Your local history stays." : removalNote)
+                Text(note)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -250,15 +276,17 @@ struct AccountRow: View {
                 Button("Cancel") { confirm = nil }
                     .buttonStyle(.pill)
                     .keyboardShortcut(.cancelAction)
-                Button(kind == .switchCodex ? "Restart Codex" : "Remove") {
+                Button(kind == .remove ? "Remove" : "Restart") {
                     confirm = nil
                     if kind == .switchCodex {
                         run("Restarting Codex…") { try await model.open(row.id) }
+                    } else if kind == .restartClaude {
+                        restart()
                     } else {
                         model.remove(row.id)
                     }
                 }
-                .buttonStyle(PillButtonStyle(prominent: true, tint: kind == .switchCodex ? .accentColor : .red))
+                .buttonStyle(PillButtonStyle(prominent: true, tint: kind == .remove ? .red : .accentColor))
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -269,6 +297,15 @@ struct AccountRow: View {
     }
 
     @ViewBuilder private var menu: some View {
+        Button(row.provider == .claude ? (row.state == .running ? "Show window" : "Open Claude") : row.provider == .codex ? "Open Codex" : "View usage", action: tap)
+        if offersConnect { Button("Connect live limits…") { signIn(row) } }
+        if row.provider == .claude && row.state == .running {
+            if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) {
+                Text("\(waiting) waiting for restart")
+            }
+            Button("Restart Claude…") { confirm = .restartClaude }
+        }
+        Divider()
         Button("Rename") {
             draft = row.label
             renaming = true
@@ -284,7 +321,7 @@ struct AccountRow: View {
             Button("Show Data Folder") { model.revealFolder(row.id) }
         }
         Divider()
-        Button("Remove…", role: .destructive) { confirm = .remove }
+        Button("Remove \(row.label)…", role: .destructive) { confirm = .remove }
     }
 
     // MARK: Actions
@@ -344,7 +381,7 @@ struct AccountRow: View {
         if row.isBest { parts.append("most left") }
         for w in meters { parts.append("\(UsageText.spokenWindow(w)), \(UsageText.spoken(w, now: now))") }
         if row.provider == .claude, row.signInLink != nil { parts.append("Signing in to Claude Code") }
-        else if offersConnect { parts.append((row.error ?? "No live limits") + ", connect") }
+        else if row.provider == .claude, let error = row.error { parts.append(error) }
         else if row.needsSignIn { parts.append(signedOutNote + (usesKey ? "" : ", sign in again")) }
         else if let error = row.error { parts.append(error) }
         if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) { parts.append(waiting) }
