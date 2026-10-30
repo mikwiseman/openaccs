@@ -5,18 +5,15 @@ import OpenAccsCore
 struct PanelView: View {
     let model: any PanelModel
     @State private var adding: Provider?
-    /// The Claude window whose account the guided connect is for.
-    @State private var connecting: UUID?
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "general"
     @State private var listHeight: CGFloat = 0
     /// Which ends of the scrolling list have more beyond them, to fade those edges.
     @State private var overflow: Edge.Set = []
 
-    init(model: any PanelModel, adding: Provider? = nil, connecting: UUID? = nil) {
+    init(model: any PanelModel, adding: Provider? = nil) {
         self.model = model
         _adding = State(initialValue: adding)
-        _connecting = State(initialValue: connecting)
     }
 
     static let width: CGFloat = 340
@@ -28,16 +25,12 @@ struct PanelView: View {
             if let provider = adding {
                 AddAccountView(provider: provider, model: model) { adding = nil }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
-            } else if let id = connecting {
-                AddAccountView(provider: .claude, connecting: id, model: model) { connecting = nil }
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 list.transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
         .frame(width: Self.width)
         .animation(.snappy(duration: 0.3), value: adding)
-        .animation(.snappy(duration: 0.3), value: connecting)
     }
 
     private var list: some View {
@@ -101,7 +94,7 @@ struct PanelView: View {
                         // Once the question below the row is laid out: scroll just enough to show all of it.
                         Task { withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo("reveal \(row.id)") } }
                     } signIn: { row in
-                        if row.provider == .claude { connecting = row.id } else { adding = row.provider }
+                        adding = row.provider
                     }
                     // What that scrolls to: the row, plus room for the list's faded bottom edge.
                     .background { Color.clear.id("reveal \(row.id)").padding(.bottom, -32) }
@@ -133,47 +126,50 @@ struct PanelView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 2) {
-            Menu {
-                ForEach(Provider.allCases, id: \.self) { provider in
-                    Button(provider.displayName) { adding = provider }
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 2) {
+                Menu {
+                    ForEach(Provider.allCases, id: \.self) { provider in
+                        Button(provider.displayName) { adding = provider }
+                    }
+                } label: {
+                    Label("Add account", systemImage: "plus")
                 }
-            } label: {
-                Label("Add account", systemImage: "plus")
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.glass)
+                .fixedSize()
+                Spacer()
+                Button { model.refresh() } label: {
+                    Image(systemName: "arrow.trianglehead.2.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .symbolEffect(.rotate.byLayer, options: .repeat(.continuous), isActive: model.isRefreshing)
+                }
+                .buttonStyle(.glass)
+                .disabled(model.isRefreshing)
+                .help("Refresh limits")
+                .accessibilityLabel(model.isRefreshing ? "Refreshing" : "Refresh limits")
+                .keyboardShortcut("r")
+                Menu {
+                    Button("Setup…") { showSettings("setup") }
+                    Button("Settings…") { showSettings("general") }
+                        .keyboardShortcut(",")
+                    Button("Check for Updates…") { AppUpdater.shared.checkForUpdates() }
+                    Divider()
+                    Button("Quit OpenAccs") { model.quit() }
+                        .keyboardShortcut("q")
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.glass)
+                .fixedSize()
+                .accessibilityLabel("OpenAccs settings and more")
             }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.quiet)
-            .fixedSize()
-            Spacer()
-            Button { model.refresh() } label: {
-                Image(systemName: "arrow.trianglehead.2.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .symbolEffect(.rotate.byLayer, options: .repeat(.continuous), isActive: model.isRefreshing)
-            }
-            .buttonStyle(.quiet)
-            .disabled(model.isRefreshing)
-            .help("Refresh limits")
-            .accessibilityLabel(model.isRefreshing ? "Refreshing" : "Refresh limits")
-            .keyboardShortcut("r")
-            Menu {
-                Button("Setup…") { showSettings("setup") }
-                Button("Settings…") { showSettings("general") }
-                    .keyboardShortcut(",")
-                Button("Check for Updates…") { AppUpdater.shared.checkForUpdates() }
-                Divider()
-                Button("Quit OpenAccs") { model.quit() }
-                    .keyboardShortcut("q")
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.quiet)
-            .fixedSize()
-            .accessibilityLabel("OpenAccs settings and more")
+            .controlSize(.small)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
 

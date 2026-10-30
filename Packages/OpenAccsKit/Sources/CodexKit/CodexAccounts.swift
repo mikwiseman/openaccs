@@ -1,11 +1,11 @@
+import CryptoKit
 import Darwin
 import Foundation
 import OpenAccsCore
 
-/// Codex sign-ins. Each login is a vault slot (Keychain `codex:<userId>:<accountId>`) holding its whole
-/// auth.json; exactly one is checked out in `~/.codex/auth.json`, which Codex and every `codex` CLI use.
-/// Custody rules: the live login is never refreshed by OpenAccs, only parked vault copies are, one at a time;
-/// the live file is checked back into its slot before anything replaces it; nothing ever logs out.
+/// Codex sign-ins. Each account has a Keychain vault slot and may own a desktop profile's auth.json.
+/// The original app and terminal keep ~/.codex/auth.json. Only parked vault copies are refreshed by
+/// OpenAccs; a native profile owns its token lifecycle. Opening another account never swaps logins.
 public actor CodexAccounts {
     private let paths: Paths
     private let secrets: SecretStore
@@ -36,6 +36,115 @@ public actor CodexAccounts {
         guard case .login(let info, let data) = live() else { return nil }
         if try secrets.read(info.vaultKey) != data { try secrets.write(data, for: info.vaultKey) }
         return info
+    }
+
+    /// Stable homes for account credentials and desktop preferences.
+    public nonisolated func profileHome(_ info: CodexAccountInfo) -> URL {
+        let key = SHA256.hash(data: Data("\(info.userId)\u{0}\(info.accountId)".utf8)).map { String(format: "%02x", $0) }.joined()
+        // macOS Unix socket paths are limited to 104 bytes; Codex puts sockets below this home.
+        return paths.home.appending(path: ".openaccs/codex/\(key.prefix(16))/Home", directoryHint: .isDirectory)
+    }
+
+    public func processID(_ info: CodexAccountInfo) -> Int32? {
+        if liveIdentity()?.isSameLogin(as: info) == true, let pid = app.processID(home: nil) { return pid }
+        let home = profileHome(info)
+        guard identity(at: home)?.isSameLogin(as: info) == true else { return nil }
+        return app.processID(home: home)
+    }
+
+    /// Opens a dedicated profile without changing or restarting any other Codex instance.
+    public func open(_ info: CodexAccountInfo, activate: Bool = true) async throws -> Int32 {
+        await lock()
+        defer { unlock() }
+        if liveIdentity()?.isSameLogin(as: info) == true {
+            return try await app.open(home: nil, activate: activate)
+        }
+        let home = profileHome(info), file = home.appending(path: "auth.json")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: file.path) {
+            let found = identity(at: home)
+            guard found?.isSameLogin(as: info) == true else { throw CodexError.verifyFailed(found: found?.email) }
+            let data = try Data(contentsOf: file)
+            if try secrets.read(info.vaultKey) != data { try secrets.write(data, for: info.vaultKey) }
+        } else {
+            guard app.processID(home: home) == nil else { throw CodexError.unsavedSignIn }
+            guard let data = try secrets.read(info.vaultKey), CodexAuthFile.identity(of: data)?.isSameLogin(as: info) == true else {
+                throw CodexError.noSavedSignIn
+            }
+            let sharedConfig = paths.codexHome.appending(path: "config.toml")
+            let config = try? String(contentsOf: sharedConfig, encoding: .utf8)
+            try preflight()
+            try fm.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try AtomicFile.write(data, to: file, permissions: 0o600)
+            // Share authored setup; credentials and browser data belong to this account.
+            for name in ["AGENTS.md", "skills"] {
+                let source = paths.codexHome.appending(path: name), destination = home.appending(path: name)
+                if fm.fileExists(atPath: source.path), !fm.fileExists(atPath: destination.path) {
+                    try fm.createSymbolicLink(at: destination, withDestinationURL: source)
+                }
+            }
+            if config != nil {
+                try fm.createSymbolicLink(at: home.appending(path: "config.toml"), withDestinationURL: sharedConfig)
+            } else {
+                try AtomicFile.write(Data("cli_auth_credentials_store = \"file\"\n".utf8), to: home.appending(path: "config.toml"), permissions: 0o600)
+            }
+        }
+        if app.processID(home: home) != nil { return try await app.open(home: home, activate: activate) }
+        // Native SQLite state is shared through CODEX_SQLITE_HOME. Share its supporting files
+        // and writer locks as directories, never symlink individual SQLite/WAL files.
+        for name in ["sessions", "archived_sessions", "thread-writer-locks", "memories", "memories_v2", "attachments"] {
+            let source = paths.codexHome.appending(path: name), destination = home.appending(path: name)
+            try fm.createDirectory(at: source, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            if destination.resolvingSymlinksInPath().standardizedFileURL == source.standardizedFileURL { continue }
+            // Never replace a pre-existing private history directory.
+            try fm.createSymbolicLink(at: destination, withDestinationURL: source)
+        }
+        try prepareProjectSidebar(in: home)
+        return try await app.open(home: home, activate: activate)
+    }
+
+    /// The desktop still caches project folders outside SQLite. Seed a new sidebar once;
+    /// never overwrite projects or preferences subsequently edited in that profile.
+    private func prepareProjectSidebar(in home: URL) throws {
+        let name = ".codex-global-state.json"
+        guard let data = try? Data(contentsOf: paths.codexHome.appending(path: name)), let shared = JSON.object(data) else { return }
+        let destination = home.appending(path: name)
+        var state: [String: Any]
+        if FileManager.default.fileExists(atPath: destination.path) {
+            guard let existing = JSON.object(try Data(contentsOf: destination)) else { throw CocoaError(.fileReadCorruptFile) }
+            state = existing
+        } else { state = [:] }
+        guard state["openaccs-project-sidebar-imported"] as? Bool != true else { return }
+        for key in ["local-projects", "project-order", "project-appearances", "pinned-project-ids", "thread-project-assignments", "sidebar-project-thread-orders", "thread-workspace-root-hints", "electron-saved-workspace-roots"] {
+            if let incoming = shared[key] as? [String: Any] {
+                state[key] = incoming.merging(state[key] as? [String: Any] ?? [:]) { _, existing in existing }
+            } else if let incoming = shared[key] as? [String] {
+                state[key] = incoming + (state[key] as? [String] ?? []).filter { !incoming.contains($0) }
+            }
+        }
+        let sourceIdentity = "local:\(paths.codexHome.path)", destinationIdentity = "local:\(home.path)"
+        for key in ["app-server-project-id-by-legacy-project-id-by-host", "app-server-projects-migration-by-host"] {
+            guard let value = (shared[key] as? [String: Any])?[sourceIdentity] else { continue }
+            var values = state[key] as? [String: Any] ?? [:]
+            values[destinationIdentity] = value
+            state[key] = values
+        }
+        state["openaccs-project-sidebar-imported"] = true
+        try AtomicFile.write(JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]), to: destination, permissions: 0o600)
+    }
+
+    private func identity(at home: URL) -> CodexAccountInfo? {
+        (try? Data(contentsOf: home.appending(path: "auth.json"))).flatMap(CodexAuthFile.identity)
+    }
+
+    /// A managed profile owns its refresh token even while closed. Never rotate a stale vault copy.
+    private func profileLogin(_ info: CodexAccountInfo) throws -> Data? {
+        let file = profileHome(info).appending(path: "auth.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        guard let data = try? Data(contentsOf: file), CodexAuthFile.identity(of: data)?.isSameLogin(as: info) == true else {
+            throw UsageError.needsSignIn
+        }
+        return data
     }
 
     public func hasVaultCopy(_ info: CodexAccountInfo) -> Bool {
@@ -86,6 +195,13 @@ public actor CodexAccounts {
         guard let data = try? Data(contentsOf: home.appending(path: "auth.json")),
               let info = CodexAuthFile.identity(of: data)
         else { throw CodexError.signInFailed }
+        await lock()
+        defer { unlock() }
+        let profile = profileHome(info)
+        if app.processID(home: profile) == nil, identity(at: profile)?.isSameLogin(as: info) == true {
+            // An explicit new login renews a closed profile. A running app still owns its sign-in.
+            try AtomicFile.write(data, to: profile.appending(path: "auth.json"), permissions: 0o600)
+        }
         try secrets.write(data, for: info.vaultKey)
         return info
     }
@@ -102,6 +218,11 @@ public actor CodexAccounts {
             return try Self.snapshot(status, body)
         }
 
+        if let data = try profileLogin(info) {
+            let (status, body) = try await fetchUsage(data, info)
+            if status == 401 { throw UsageError.unexpected("Open this Codex account to renew its sign-in") }
+            return try Self.snapshot(status, body)
+        }
         guard var data = try secrets.read(info.vaultKey) else { throw UsageError.notConnected }
         let notRefreshed = UsageError.unexpected("Not refreshed")
         var refreshed = false
@@ -203,6 +324,7 @@ public actor CodexAccounts {
     private func refreshParked(_ info: CodexAccountInfo, from used: Data) async throws -> Data {
         await lock()
         defer { unlock() }
+        if let data = try profileLogin(info) { return data }
         switch live() {
         case .login(let liveInfo, _) where liveInfo.isSameLogin(as: info):
             throw UsageError.unexpected("Codex is using this account now")

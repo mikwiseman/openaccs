@@ -1,110 +1,145 @@
 import SwiftUI
 import SetupKit
 
-/// The Setup tab: what Claude and Codex share, what needs the user, and the changes One setup would make.
-/// Every sentence is what was read from the files; nothing changes until the user applies.
+/// One decision first; file-level choices live in Details and the review.
 struct SetupView: View {
     let model: SetupModel
     @State private var reviewing: Set<String>?
+    @State private var showsDetails = false
     @State private var showsHistory = false
     @State private var autonomyPlan: [SetupChange]?
     @Environment(\.openWindow) private var openWindow
 
+    private var ready: Bool { model.changes.isEmpty && model.attention.isEmpty }
+
     var body: some View {
-        Form {
-            Section {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("One setup").font(.system(size: 15, weight: .semibold))
-                        Text("What Claude and Codex share on this Mac, read from their files.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    Button(model.changes.isEmpty ? "Nothing to change" : "Review \(model.changes.count)…") {
-                        reviewing = Self.defaultSelection(model)
-                    }
-                    .disabled(model.changes.isEmpty || model.isApplying)
-                }
+        VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Your setup, everywhere.")
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                Text("The same instructions, skills and tools in Claude and Codex.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if !model.attention.isEmpty {
-                Section("Needs you · \(model.attention.count)") {
-                    ForEach(model.attention, id: \.item.id) { entry in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Circle()
-                                .fill(entry.item.level == .broken ? Color.red : Color.orange)
-                                .frame(width: 7, height: 7)
-                                .accessibilityHidden(true)
-                            Text(entry.item.text).fixedSize(horizontal: false, vertical: true)
-                            Spacer()
-                            if !entry.item.fixes.isEmpty {
-                                Button(entry.item.fixes.count > 1 ? "Choose…" : "Fix…") {
-                                    // With what the fix needs, or Apply would skip it.
-                                    reviewing = entry.item.fixes.count > 1 ? [] : model.changes.includingRequirements(Set(entry.item.fixes))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Section("Shared") {
+            VStack(spacing: 0) {
                 ForEach([SetupArea.instructions, .skills, .mcp], id: \.self) { area in
-                    if let report = model.report(area) { AreaRow(report: report) }
-                }
-                HStack {
-                    Text("Your instructions, other people's, and a wizard").foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Open…") {
-                        NSApp.activate()
-                        openWindow(id: "instructions")
-                    }
-                }
-            }
-            if let defaults = model.report(.defaults) {
-                Section("Defaults") {
-                    AreaRow(report: defaults)
-                    LabeledContent("Set autonomy") {
-                        HStack(spacing: 8) {
-                            ForEach(DefaultsSetup.Autonomy.allCases, id: \.self) { level in
-                                Button(level.rawValue.capitalized + "…") {
-                                    autonomyPlan = model.autonomyChanges(to: level)
+                    if let report = model.report(area) {
+                        Button { showsDetails = true } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: symbol(area))
+                                    .font(.system(size: 17, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(area == .mcp ? "Tools" : area.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text(report.summary).font(.system(size: 12)).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                .disabled(model.isApplying)
+                                Spacer(minLength: 8)
+                                Image(systemName: report.changes.isEmpty && report.attention.isEmpty ? "checkmark" : "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                             }
+                            .padding(.vertical, 15)
+                            .contentShape(.rect)
                         }
+                        .buttonStyle(.plain)
+                        if area != .mcp { Divider() }
                     }
                 }
             }
-            if let importSync = model.report(.importSync), !importSync.attention.isEmpty || !importSync.changes.isEmpty {
-                Section("ChatGPT Import") { AreaRow(report: importSync) }
+            Spacer(minLength: 0)
+            if let outcome = model.outcome.first {
+                Text(outcome).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .lineLimit(3).help(model.outcome.joined(separator: "\n"))
             }
-            if !model.outcome.isEmpty {
-                Section {
-                    ForEach(model.outcome, id: \.self) { Text($0).fixedSize(horizontal: false, vertical: true) }
-                }
-            }
-            Section {
-                HStack {
-                    Button("History…") { showsHistory = true }
-                        .disabled(model.history.isEmpty)
+            GlassEffectContainer(spacing: 16) {
+                HStack(spacing: 12) {
+                    Button("Details…") { showsDetails = true }.buttonStyle(.glass)
                     Spacer()
-                    Text("Never shared: logins, connectors, account skills.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    if model.isScanning || model.isApplying {
+                        ProgressView().controlSize(.small)
+                    } else if ready {
+                        Label("You're all set", systemImage: "checkmark.circle")
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                    } else {
+                        Button(model.changes.isEmpty ? "Review details…" : "Review setup…") {
+                            if model.changes.isEmpty { showsDetails = true } else { reviewing = Self.defaultSelection(model) }
+                        }
+                            .buttonStyle(.glassProminent)
+                    }
                 }
+                .controlSize(.large)
             }
         }
-        .formStyle(.grouped)
-        .overlay(alignment: .topTrailing) {
-            if model.isScanning || model.isApplying { ProgressView().controlSize(.small).padding(10) }
-        }
+        .padding(28)
         .task { await model.refresh() }
+        .sheet(isPresented: $showsDetails) { details }
         .sheet(isPresented: Binding(get: { reviewing != nil }, set: { if !$0 { reviewing = nil } })) {
             ReviewSheet(model: model, selected: reviewing ?? []) { reviewing = nil }
         }
         .sheet(isPresented: $showsHistory) { HistorySheet(model: model) { showsHistory = false } }
         .sheet(isPresented: Binding(get: { autonomyPlan != nil }, set: { if !$0 { autonomyPlan = nil } })) {
             ReviewSheet(model: model, selected: Set((autonomyPlan ?? []).map(\.id)), planned: autonomyPlan) { autonomyPlan = nil }
+        }
+    }
+
+    private var details: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Setup details").font(.headline)
+                Spacer()
+                Button("Done") { showsDetails = false }.keyboardShortcut(.cancelAction)
+            }.padding(20)
+            Form {
+                if !model.attention.isEmpty {
+                    Section("Needs a decision") {
+                        ForEach(model.attention, id: \.item.id) { entry in
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(entry.item.text).fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                if !entry.item.fixes.isEmpty {
+                                    Button("Review…") {
+                                        showsDetails = false
+                                        reviewing = entry.item.fixes.count > 1 ? [] : model.changes.includingRequirements(Set(entry.item.fixes))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Section("Shared") {
+                    ForEach(model.reports, id: \.area) { AreaRow(report: $0) }
+                }
+                Section {
+                    Button("Edit instructions…") {
+                        showsDetails = false
+                        openWindow(id: "instructions")
+                    }
+                    LabeledContent("Permissions") {
+                        Menu("Choose…") {
+                            ForEach(DefaultsSetup.Autonomy.allCases, id: \.self) { level in
+                                Button(level.rawValue.capitalized) {
+                                    showsDetails = false
+                                    autonomyPlan = model.autonomyChanges(to: level)
+                                }
+                            }
+                        }
+                    }
+                    Button("History…") { showsDetails = false; showsHistory = true }
+                        .disabled(model.history.isEmpty)
+                }
+            }.formStyle(.grouped)
+        }
+        .frame(width: 560, height: 540)
+    }
+
+    private func symbol(_ area: SetupArea) -> String {
+        switch area {
+        case .instructions: "text.alignleft"
+        case .skills: "sparkles"
+        default: "wrench.and.screwdriver"
         }
     }
 
@@ -200,7 +235,7 @@ struct ReviewSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Review changes").font(.system(size: 15, weight: .semibold))
-                Text("Nothing changes until you apply. Each change goes to History, where you can undo it.")
+                Text("Choose what to share. You can undo changes in History.")
                     .foregroundStyle(.secondary)
             }
             List {

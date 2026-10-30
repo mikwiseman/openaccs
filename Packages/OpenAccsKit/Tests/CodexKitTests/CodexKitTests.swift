@@ -3,6 +3,109 @@ import OpenAccsCore
 import Testing
 @testable import CodexKit
 
+@Suite struct ProfileTests {
+    @Test func profilePathsLeaveRoomForMacOSUnixSockets() {
+        let accounts = CodexAccounts(paths: Paths(home: URL(filePath: "/Users/mikwiseman")), secrets: MemorySecretStore())
+        let socket = accounts.profileHome(Fake.info("bob")).appending(path: "app-server-daemon/daemon.sock")
+        #expect(socket.path.utf8.count < 104)
+    }
+
+    @Test func opensAnotherAccountWithoutQuittingOrReplacingTheDefault() async throws {
+        let box = try Sandbox()
+        try box.setLive(Fake.auth("ana"))
+        try box.park(Fake.auth("bob"), as: "bob")
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        #expect(try box.live() == Fake.auth("ana"))
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        #expect(CodexAuthFile.identity(of: try Data(contentsOf: home.appending(path: "auth.json"))) == Fake.info("bob"))
+        #expect(box.app.log.isEmpty) // no quit, daemon restart, or legacy launch
+        #expect(box.app.profileLaunches == [home.path])
+    }
+
+    @Test func anExistingProfileOwnsItsRotatedLogin() async throws {
+        let box = try Sandbox()
+        try box.setLive(Fake.auth("ana"))
+        try box.park(Fake.auth("bob"), as: "bob")
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        let rotated = Fake.auth("bob", refresh: "rt.new")
+        try rotated.write(to: home.appending(path: "auth.json"))
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        #expect(try Data(contentsOf: home.appending(path: "auth.json")) == rotated)
+        #expect(try box.vault("bob") == rotated)
+    }
+
+    @Test func profilesShareSetupButKeepTheirOwnAuth() async throws {
+        let box = try Sandbox()
+        let config = box.paths.codexHome.appending(path: "config.toml")
+        try Data("model = \"test-model\"\n".utf8).write(to: config)
+        try box.park(Fake.auth("bob"), as: "bob")
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: home.appending(path: "config.toml").path) == config.path)
+        #expect(CodexAuthFile.identity(of: try Data(contentsOf: home.appending(path: "auth.json"))) == Fake.info("bob"))
+    }
+
+    @Test func profilesShareHistoryAndWriterLocksWithoutSharingTheLogin() async throws {
+        let box = try Sandbox()
+        try box.setLive(Fake.auth("ana"))
+        try box.park(Fake.auth("bob"), as: "bob")
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        for name in ["sessions", "archived_sessions", "thread-writer-locks", "memories", "memories_v2", "attachments"] {
+            let shared = box.paths.codexHome.appending(path: name)
+            let linked = home.appending(path: name)
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: linked.path) == shared.path)
+            try Data("new content".utf8).write(to: linked.appending(path: "probe"))
+            #expect(try String(contentsOf: shared.appending(path: "probe"), encoding: .utf8) == "new content")
+        }
+        #expect(try box.live() == Fake.auth("ana"))
+    }
+
+    @Test func launchSharesTheNativeDatabaseDirectoryAndKeepsAuthPrivate() throws {
+        let box = try Sandbox()
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        let environment = CodexApp(paths: box.paths).environment(home: home)
+        #expect(environment["CODEX_HOME"] == home.path)
+        #expect(environment["CODEX_SQLITE_HOME"] == box.paths.codexHome.path)
+        #expect(environment["CODEX_ELECTRON_USER_DATA_PATH"] == home.deletingLastPathComponent().appending(path: "Electron").path)
+    }
+
+    @Test func newProfilesKeepTheExistingProjectSidebarAndTheirOwnWindowPreferences() async throws {
+        let box = try Sandbox()
+        try box.park(Fake.auth("bob"), as: "bob")
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let filename = ".codex-global-state.json"
+        let source: [String: Any] = [
+            "local-projects": ["project-1": ["id": "project-1", "name": "Example", "rootPaths": ["/code/example"]]],
+            "project-order": ["project-1"],
+            "app-server-project-id-by-legacy-project-id-by-host": ["local:\(box.paths.codexHome.path)": ["project-1": "server-1"]],
+            "electron-main-window-bounds": ["width": 900],
+        ]
+        try JSONSerialization.data(withJSONObject: source).write(to: box.paths.codexHome.appending(path: filename))
+        try JSONSerialization.data(withJSONObject: ["electron-main-window-bounds": ["width": 700]]).write(to: home.appending(path: filename))
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        let state = try #require(JSON.object(Data(contentsOf: home.appending(path: filename))))
+        #expect((state["local-projects"] as? [String: Any])?["project-1"] != nil)
+        #expect((state["electron-main-window-bounds"] as? [String: Int])?["width"] == 700)
+        #expect((state["app-server-project-id-by-legacy-project-id-by-host"] as? [String: [String: String]])?["local:\(home.path)"]?["project-1"] == "server-1")
+    }
+
+    @Test func neverOverwritesAProfileSignedInAsSomeoneElse() async throws {
+        let box = try Sandbox()
+        try box.park(Fake.auth("bob"), as: "bob")
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try Fake.auth("ana").write(to: home.appending(path: "auth.json"))
+        await #expect(throws: CodexError.verifyFailed(found: "ana@example.com")) {
+            try await box.accounts.open(Fake.info("bob"), activate: false)
+        }
+        #expect(box.app.profileLaunches.isEmpty)
+    }
+}
+
 @Suite struct IdentityTests {
     @Test func readsAccountUserEmailAndPlan() {
         let info = CodexAuthFile.identity(of: Fake.auth("ana", plan: "plus"))
@@ -114,6 +217,21 @@ import Testing
         await #expect(throws: CodexError.signInFailed) { try await box.accounts.addAccount() }
         let loginHome = try #require(box.app.loginHome)
         #expect(!FileManager.default.fileExists(atPath: loginHome.path))
+    }
+
+    @Test func signingInAgainRenewsAClosedProfile() async throws {
+        let box = try Sandbox()
+        try box.setLive(Fake.auth("ana"))
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let file = home.appending(path: "auth.json")
+        try Fake.auth("bob", refresh: "expired").write(to: file)
+        box.app.loginWrites = Fake.auth("bob", refresh: "new-login")
+        _ = try await box.accounts.addAccount()
+        _ = try await box.accounts.open(Fake.info("bob"))
+        #expect(try Data(contentsOf: file) == box.app.loginWrites)
+        #expect(try box.vault("bob") == box.app.loginWrites)
+        #expect(try box.live() == Fake.auth("ana"))
     }
 
 }

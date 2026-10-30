@@ -17,14 +17,11 @@ protocol PanelModel: AnyObject, Observable {
     /// Grok Bot accounts found on this Mac that are not added yet.
     var grokBotAccounts: [String] { get }
 
-    /// Claude: activate or launch the profile. Codex: quit, swap, relaunch (the panel asks first).
+    /// Claude and Codex: activate or launch the account’s existing profile.
     /// Limits: open the provider's usage page.
     func open(_ id: UUID) async throws
     /// Quit and relaunch a running Claude profile so it loads the sessions it hasn't seen.
     func restart(_ id: UUID) async throws
-    /// Signs Anthropic's Claude Code in (browser) for the account this window shows: every window of that
-    /// account gets its live limits.
-    func connectExactLimits(_ id: UUID) async throws
     func rename(_ id: UUID, to label: String)
     func setColor(_ id: UUID, to color: Int)
     func remove(_ id: UUID)
@@ -54,6 +51,7 @@ struct PanelRow: Identifiable, Hashable {
     }
 
     var id: UUID
+    var pid: Int32? = nil
     var provider: Provider
     var label: String
     /// Index into `AccountColor.all`.
@@ -63,7 +61,7 @@ struct PanelRow: Identifiable, Hashable {
     var usage: UsageSnapshot?
     /// Why usage is missing or may be wrong ("Network: offline"). nil when fine.
     var error: String?
-    /// Signed out. Claude: no live limits, and the row's one Connect fixes it.
+    /// The native app or provider needs a valid sign-in.
     var needsSignIn: Bool = false
     /// Claude: sessions from other profiles this running profile hasn't loaded yet.
     var pendingSessions: Int = 0
@@ -71,12 +69,8 @@ struct PanelRow: Identifiable, Hashable {
     var pendingChanges: Int = 0
     /// Most room left among this provider's accounts.
     var isBest: Bool = false
-    /// Claude: shows Claude Code's live numbers.
-    var isLive: Bool = false
     /// Claude: the account and org the window shows. Windows with the same one share one sign-in.
     var limitsGroup: String?
     /// Has a data folder to show in Finder.
     var hasFolder: Bool = false
-    /// Claude: the link of a Claude Code sign-in running for this window, from the panel or the terminal.
-    var signInLink: URL?
 }

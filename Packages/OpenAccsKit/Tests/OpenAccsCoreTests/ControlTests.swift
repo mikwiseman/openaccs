@@ -451,7 +451,7 @@ private final class Flag: @unchecked Sendable {
         let json = ControlAccount.json(Array(accounts.prefix(1)))
         let root = try #require(JSON.object(Data(json.utf8)))
         let account = try #require((root["accounts"] as? [[String: Any]])?.first)
-        #expect(Set(account.keys) == ["id", "provider", "label", "plan", "state", "windows", "asOf", "source", "needsSignIn", "pendingSessions", "pendingChanges", "best"])
+        #expect(Set(account.keys) == ["id", "provider", "label", "plan", "state", "windows", "asOf", "source", "needsSignIn", "pendingSessions", "pendingChanges", "best", "windowIDs"])
         #expect(account["state"] as? String == "open")
         #expect(account["provider"] as? String == "claude")
         let windows = try #require(account["windows"] as? [[String: Any]])

@@ -263,8 +263,9 @@ private struct Command {
             throw Failure.usage("openaccs launch <account>… | --all [--json]. Quote names containing spaces.")
         }
         let accounts = try App.call(ControlRequest(.status)).accounts
-        let selection = flags.contains("--all") ? accounts.filter { $0.provider == .claude }
-            : try args.map { try resolve($0, in: accounts, claudeOnly: "launch") }
+        let selection = flags.contains("--all") ? accounts.filter { $0.provider == .claude || $0.provider == .codex }
+            : try args.map { try resolve($0, in: accounts) }
+        guard selection.allSatisfy({ $0.provider == .claude || $0.provider == .codex }) else { throw Failure.usage("Only Claude and Codex have app windows to launch.") }
         var seen = Set<UUID>()
         var results: [ControlLaunchResult] = []
         for account in selection where seen.insert(account.id).inserted {
@@ -306,14 +307,9 @@ private struct Command {
             Terminal.note("Opening \(account.label)…")
             _ = try App.call(ControlRequest(.open, id: account.id))
             print(account.state == .open ? "Switched to \(account.label)." : "Opened \(account.label).")
-        case .codex where account.state == .active:
+        case .codex:
             _ = try App.call(ControlRequest(.open, id: account.id))
             print("Opened Codex on \(account.label).")
-        case .codex:
-            try confirm("Restart Codex as \(account.label)? Codex quits and reopens on this account. Your local history stays.")
-            Terminal.note("Restarting Codex…")
-            _ = try App.call(ControlRequest(.open, id: account.id))
-            print("Codex is now on \(account.label).")
         case .grok, .kimi, .zai:
             _ = try App.call(ControlRequest(.open, id: account.id))
             print("Opened the \(account.provider.displayName) usage page.")
@@ -330,30 +326,9 @@ private struct Command {
 
     func connect() throws {
         try allow([])
-        let before = try App.call(ControlRequest(.status)).accounts
-        let account = try resolve(query, in: before, claudeOnly: "connect")
-        func live(_ a: ControlAccount) -> Bool {
-            a.provider == .claude && a.source == "Claude Code" && !a.needsSignIn && !a.windows.isEmpty
-        }
-        // Saved desktop measurements don't imply a Claude Code sign-in.
-        let needsConnection = !live(account)
-        let browser = Browser.current, privately = needsConnection && browser?.privateFlag != nil
-        if needsConnection, let browser, privately {
-            Terminal.note("Sign in to Claude Code with the account you use in \(account.label), in the private \(browser.name) window that opens. Close any other private windows first. Ctrl-C cancels.")
-        } else if needsConnection {
-            Terminal.note("Sign in to Claude Code with the account you use in \(account.label), in your browser. Ctrl-C cancels.")
-            Terminal.note("If claude.ai says \"Unable to access Claude Code\", it's signed in to another account. Click Copy link under \(account.label) in OpenAccs and open it in a private window.")
-        }
+        let account = try resolve(query, in: try App.call(ControlRequest(.status)).accounts, claudeOnly: "connect")
         let reply = try App.call(ControlRequest(.connect, id: account.id))
-        let wasLive = Set(before.filter(live).map(\.id))
-        // Name only the windows that went live, so the line stays true for every account, org and app version.
-        let connected = reply.accounts.filter { live($0) && !wasLive.contains($0.id) }.map(\.label)
-        guard reply.accounts.contains(where: { $0.id == account.id && live($0) }), !connected.isEmpty else {
-            let row = reply.accounts.first { $0.id == account.id }
-            print("Signed in to Claude Code, but no limits came back yet (\(row?.error ?? "no answer yet")).")
-            return
-        }
-        print("Live limits connected for \(windowList(connected))." + (privately ? " Close the private window." : ""))
+        show(reply, only: .claude)
     }
 
     func rename() throws {
@@ -500,13 +475,13 @@ private struct Command {
 
       openaccs [status] [provider] [--json]   what's left on every account, and when it comes back
       openaccs best <provider> [--json]       the account with the most left
-      openaccs use <account> [--yes]          Claude: open it · Codex: switch to it · others: usage page
+      openaccs use <account> [--yes]          show or open its window · others: usage page
       openaccs use --best <provider> [--yes]  the same, for the account with the most left
-      openaccs launch <account>… [--json]    open saved Claude profiles in the background; skip those already open
-      openaccs launch --all [--json]         the same, for every saved Claude profile (never restarts)
+      openaccs launch <account>… [--json]    open saved Claude and Codex profiles; skip those already open
+      openaccs launch --all [--json]         the same, for every saved Claude and Codex profile
       openaccs restart <account>              restart a Claude profile so it loads new sessions
       openaccs refresh [--json]               ask every provider now, then show status
-      openaccs connect <account>              live Claude limits for that account's windows (one Claude Code sign-in)
+      openaccs connect <account>              refresh Claude limits (legacy alias)
       openaccs add claude <name>
       openaccs add codex | grok | grok-bot [<bot account>]
       openaccs add kimi | zai [<key> | -] [--china]

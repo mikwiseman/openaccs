@@ -3,8 +3,8 @@ import AppKit
 import OpenAccsCore
 import SetupKit
 
-/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --connect | --settings | --setup]` renders the
-/// panel (or an add view, the guided connect of the first Claude row without live limits, the Settings window or
+/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --settings | --setup]` renders the
+/// panel (or an add view, the Settings window or
 /// its Setup tab) at 2x to a PNG and exits, without a menu-bar item. For checking the UI without clicking. A live
 /// `--setup` scans this Mac (read only) first.
 ///
@@ -26,11 +26,11 @@ enum Snapshot {
 
         NSApplication.shared.setActivationPolicy(.prohibited)
         #if DEBUG
-        let interactive = args.contains("--interactive") && Paths.isOverridden
+        let interactive = args.contains("--interactive")
         #else
         let interactive = false
         #endif
-        let model: any PanelModel = args.contains("--demo") ? DemoModel() : live(!interactive)
+        let model: any PanelModel = args.contains("--demo") ? DemoModel() : live(!(interactive && Paths.isOverridden))
         // A live model loads asynchronously; give it up to 30 s.
         if let live = model as? AppModel {
             let deadline = Date().addingTimeInterval(30)
@@ -48,12 +48,11 @@ enum Snapshot {
             repeat { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) } while (setup.isScanning || setup.reports.isEmpty) && Date() < deadline
             root = args.contains("--review")
                 ? AnyView(ReviewSheet(model: setup, selected: Set(setup.reports.recommendedChanges.map(\.id))) {})
-                : AnyView(SetupView(model: setup).frame(width: 580, height: 700))
+                : AnyView(SetupView(model: setup).frame(width: 520, height: 440))
         } else if args.contains("--settings") {
             root = AnyView(SettingsView(model: model, updater: AppUpdater.shared))
         } else {
-            let connecting = args.contains("--connect") ? model.rows.first { $0.provider == .claude && $0.needsSignIn }?.id : nil
-            root = AnyView(PanelView(model: model, adding: adding, connecting: connecting))
+            root = AnyView(PanelView(model: model, adding: adding))
         }
         let host = NSHostingView(rootView: root.background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: 400),
@@ -81,10 +80,10 @@ enum Snapshot {
         #if DEBUG
         // Keep the rendered fixture available to background UI automation, without taking focus.
         if interactive {
-            if let model = model as? AppModel { ControlHandler.start(model: model) }
+            if Paths.isOverridden, let model = model as? AppModel { ControlHandler.start(model: model) }
             NSApplication.shared.setActivationPolicy(.accessory)
             window.styleMask = [.titled, .closable]
-            window.title = "OpenAccs — Test profiles"
+            window.title = Paths.isOverridden ? "OpenAccs — Test profiles" : "OpenAccs — Preview"
             window.orderBack(nil)
             NSApplication.shared.run()
         }

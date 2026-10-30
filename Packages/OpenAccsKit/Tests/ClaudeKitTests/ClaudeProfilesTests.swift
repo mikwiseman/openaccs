@@ -228,6 +228,16 @@ import Testing
         for _ in 0..<3 { #expect(try await profiles.open(profile, activate: false) == 77) }
     }
 
+    @MainActor @Test func recognizesAnExistingProfileLaunchedWithASplitDataFlag() async throws {
+        let home = try TempHome()
+        let custom = home.url.appending(path: "Profiles/Work account/Data", directoryHint: .isDirectory)
+        let profiles = ClaudeProfiles(paths: home.paths, processes: {
+            [ClaudeProcess(pid: 77, arguments: ["Claude", "--user-data-dir", custom.path], launchDate: nil)]
+        }, launch: { _, _, _, _ in Issue.record("Opened a duplicate of an existing profile") })
+        #expect(try await profiles.open(profiles.resolve(ClaudeAccountInfo(dataDir: custom.path)),
+                                        activate: false, timeout: .milliseconds(10)) == 77)
+    }
+
     @MainActor @Test func backgroundOpenLaunchesWithoutActivationAndRefusesUnknownProcesses() async throws {
         let home = try TempHome()
         let custom = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
