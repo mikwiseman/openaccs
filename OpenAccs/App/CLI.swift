@@ -68,6 +68,7 @@ private struct Command {
         case nil, "status", "limits": try status()
         case "best": try best()
         case "use", "switch", "open": try use()
+        case "launch": try launch()
         case "restart": try restart()
         case "refresh": try refresh()
         case "connect": try connect()
@@ -254,6 +255,42 @@ private struct Command {
 
     // MARK: Acting
 
+    /// Resolve the whole selection before acting. Always ask the app, which checks live processes under
+    /// its per-profile lock; a status snapshot in this client cannot prevent concurrent launches.
+    func launch() throws {
+        try allow(["--all", "--json"])
+        guard flags.contains("--all") ? args.isEmpty : !args.isEmpty else {
+            throw Failure.usage("openaccs launch <account>… | --all [--json]. Quote names containing spaces.")
+        }
+        let accounts = try App.call(ControlRequest(.status)).accounts
+        let selection = flags.contains("--all") ? accounts.filter { $0.provider == .claude }
+            : try args.map { try resolve($0, in: accounts, claudeOnly: "launch") }
+        var seen = Set<UUID>()
+        var results: [ControlLaunchResult] = []
+        for account in selection where seen.insert(account.id).inserted {
+            let result: ControlLaunchResult
+            do {
+                guard let launched = try App.call(ControlRequest(.launch, id: account.id)).launch else {
+                    throw Failure.error("This OpenAccs doesn't support launch yet. Update and reopen OpenAccs.")
+                }
+                result = launched
+            } catch {
+                let message = (error as? Failure)?.message ?? error.localizedDescription
+                result = ControlLaunchResult(id: account.id, label: account.label, status: .failed, error: message)
+            }
+            results.append(result)
+            if !json {
+                switch result.status {
+                case .opened: print("Opened \(result.label) (PID \(result.pid ?? 0)).")
+                case .alreadyOpen: print("Already open: \(result.label) (PID \(result.pid ?? 0)).")
+                case .failed: print("Failed: \(result.label): \(result.error ?? "Unknown error")")
+                }
+            }
+        }
+        if json { try printJSON(["results": results]) }
+        if results.contains(where: { $0.status == .failed }) { throw Failure.error("") }
+    }
+
     func use() throws {
         try allow(["--yes", "--best"])
         let accounts = try App.call(ControlRequest(.status)).accounts
@@ -295,16 +332,19 @@ private struct Command {
         try allow([])
         let before = try App.call(ControlRequest(.status)).accounts
         let account = try resolve(query, in: before, claudeOnly: "connect")
-        // Only a row that offers Connect starts a sign-in; for the others the app's answer says why not.
-        let browser = Browser.current, privately = account.needsSignIn && browser?.privateFlag != nil
-        if account.needsSignIn, let browser, privately {
+        func live(_ a: ControlAccount) -> Bool {
+            a.provider == .claude && a.source == "Claude Code" && !a.needsSignIn && !a.windows.isEmpty
+        }
+        // Saved desktop measurements don't imply a Claude Code sign-in.
+        let needsConnection = !live(account)
+        let browser = Browser.current, privately = needsConnection && browser?.privateFlag != nil
+        if needsConnection, let browser, privately {
             Terminal.note("Sign in to Claude Code with the account you use in \(account.label), in the private \(browser.name) window that opens. Close any other private windows first. Ctrl-C cancels.")
-        } else if account.needsSignIn {
+        } else if needsConnection {
             Terminal.note("Sign in to Claude Code with the account you use in \(account.label), in your browser. Ctrl-C cancels.")
             Terminal.note("If claude.ai says \"Unable to access Claude Code\", it's signed in to another account. Click Copy link under \(account.label) in OpenAccs and open it in a private window.")
         }
         let reply = try App.call(ControlRequest(.connect, id: account.id))
-        func live(_ a: ControlAccount) -> Bool { a.provider == .claude && !a.needsSignIn && !a.windows.isEmpty }
         let wasLive = Set(before.filter(live).map(\.id))
         // Name only the windows that went live, so the line stays true for every account, org and app version.
         let connected = reply.accounts.filter { live($0) && !wasLive.contains($0.id) }.map(\.label)
@@ -462,6 +502,8 @@ private struct Command {
       openaccs best <provider> [--json]       the account with the most left
       openaccs use <account> [--yes]          Claude: open it · Codex: switch to it · others: usage page
       openaccs use --best <provider> [--yes]  the same, for the account with the most left
+      openaccs launch <account>… [--json]    open saved Claude profiles in the background; skip those already open
+      openaccs launch --all [--json]         the same, for every saved Claude profile (never restarts)
       openaccs restart <account>              restart a Claude profile so it loads new sessions
       openaccs refresh [--json]               ask every provider now, then show status
       openaccs connect <account>              live Claude limits for that account's windows (one Claude Code sign-in)

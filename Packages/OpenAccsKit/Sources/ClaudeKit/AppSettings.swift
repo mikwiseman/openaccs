@@ -306,9 +306,10 @@ public enum AppSettings {
 
     /// Writes a brand-new window's config before its first launch, with the shared settings of `source` (a
     /// window's data folder) that belong to no account, and its pins when they are shared. Never replaces a file.
-    public static func seed(_ dataDir: URL, from source: URL, pins: Bool = true) throws {
-        guard let object = document(source.appending(path: "claude_desktop_config.json"))?.object else { return }
-        var seeded: [String: Any] = [:]
+    public static func seed(_ dataDir: URL, from source: URL? = nil, pins: Bool = true) throws {
+        let object = source.flatMap { document($0.appending(path: "claude_desktop_config.json"))?.object } ?? [:]
+        // Hidden by default; an explicit shared choice in Claude's System settings still wins.
+        var seeded: [String: Any] = ["preferences": ["menuBarEnabled": false]]
         // With pin sync, a new window also starts with the source's pins: the app reads them from here while its
         // own storage is still empty. (Afterwards pin sync keeps them the same.)
         let places = settings.filter { $0.file == .config && !$0.place.contains { $0.contains("{") } }.map(\.place)

@@ -37,10 +37,12 @@ struct Meter: View {
             Text("\(Text(UsageText.percentLeft(window)).foregroundStyle(tint)) \(Text("left").foregroundStyle(.secondary))")
                 .font(.system(size: 11.5, weight: .medium).monospacedDigit())
                 .frame(width: Self.leftWidth, alignment: .trailing)
-            Text(UsageText.reset(window.resetsAt, now: now) ?? "")
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: Self.resetWidth, alignment: .trailing)
+            if let reset = UsageText.reset(window.resetsAt, now: now) {
+                Text(reset)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: Self.resetWidth, alignment: .trailing)
+            }
         }
     }
 

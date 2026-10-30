@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>OpenAccs</title>
         <item>
+            <title>0.4.5</title>
+            <pubDate>Fri, 30 Oct 2026 06:58:49 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.4.5</sparkle:version>
+            <sparkle:shortVersionString>0.4.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[Claude limits now appear automatically from saved desktop measurements, with their age. OpenAccs reuses an existing Claude Code sign-in for live updates; connecting another account is optional.
+
+- Cleaner account rows, visible actions, and one Refresh limits button.
+- Named removal confirmation. Claude profiles and shared history stay on disk.
+- `openaccs launch <account>… --json` or `launch --all --json` opens missing profiles in the background and leaves running ones untouched, including concurrent requests.
+- New Claude profiles hide their menu-bar icon by default.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.5/OpenAccs-0.4.5.zip" length="5274272" type="application/octet-stream" sparkle:edSignature="A8OjyhRkr7luVwW06JGQsGkRZTaaiXQAqsZzRN1ci0Yx7lVLdIbhyMnYeQPsc4r9CnKYAZMxFgAKMAcKVUFAAA=="/>
+        </item>
+        <item>
             <title>0.4.4</title>
             <pubDate>Wed, 28 Oct 2026 15:04:38 +0300</pubDate>
             <link>https://github.com/mikwiseman/openaccs</link>
@@ -43,25 +59,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.3/OpenAccs-0.4.3.zip" length="5070058" type="application/octet-stream" sparkle:edSignature="ugt2WkPMuy6GlRL/rKe1k9mRpVh5xnZoYfulr7jGEQelVSnBHPQciiD//wGHatkDQnb9BRudaaZ8GsMCp7kfCQ=="/>
         </item>
-        <item>
-            <title>0.4.2</title>
-            <pubDate>Mon, 26 Oct 2026 16:48:54 +0300</pubDate>
-            <link>https://github.com/mikwiseman/openaccs</link>
-            <sparkle:version>0.4.2</sparkle:version>
-            <sparkle:shortVersionString>0.4.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[Each Claude window keeps its own pinned chats.
-
-- Chats, archive, permission mode, effort, Ultracode and model still sync between every window.
-- Pins sync only when you turn on Settings → General → Sync pinned chats. It is off by default.
-- Turning it on keeps every pin from every window, so nothing gets unpinned.
-- A new Claude window starts with no pins, unless pin sync is on.
-]]></description>
-            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.2/OpenAccs-0.4.2.zip" length="4988144" type="application/octet-stream" sparkle:edSignature="ljk0AcXQ7lbn12QVuvcGOle7PWozALqJHgnjaR8QVpBFyTIslIxtVx0DT76sjTt2jGDLrmYnY7F0ztqqiWP9Cw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: tao6UMyZShZ0/0W+xiyxzWWZNDO4rSM3OA3PLN6SC7cDHnGuJqm6k+dpTlXJury0QIpRYWGysnuFNWU7u+rgCA==
-length: 5525
+edSignature: fALVxN8OFuSq360mQqbClyjI5m5KsC+Nbq5h/oGPEbtNeXzLSq8Ee+ixk7rz7XHT2/aL2c0R9se4JVxOnxjsDw==
+length: 5715
 -->

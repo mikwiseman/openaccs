@@ -68,7 +68,7 @@ Each account row shows how much is left of each limit and when it resets. A full
 
 | Provider | What OpenAccs shows | How you connect it |
 | --- | --- | --- |
-| Claude | What's left of the 5-hour and weekly limits, with reset times, your plan and extra usage spend, live from Claude Code every 5 minutes. | [Connect live limits](#connect-live-claude-limits) once per account. One Claude Code sign-in covers every window of that account, including windows you add later. Until then the row says "No live limits" and shows no numbers. When a session runs into a limit, Claude Code notes the exact time it comes back, and OpenAccs shows it under that account's windows. |
+| Claude | The 5-hour and weekly limits Claude last saved, with the measurement's age. An existing Claude Code sign-in adds live updates every 5 minutes, reset times, plan and extra usage spend. | Automatic for known desktop accounts and matching Claude Code sign-ins. [Connect live limits](#connect-live-claude-limits) is optional. One sign-in covers every window of that account. |
 | Codex | What's left of the 5-hour and weekly limits with reset times, a monthly limit for credit-based workspaces, your credit balance and banked limit resets. | Your Codex sign-in. OpenAccs reads the same numbers the Codex app shows, from ChatGPT's usage endpoint. |
 | Grok | What's left of the weekly limit, reset time and plan. | The Grok Bot app's local cache, with no sign-in and no network. Or the official Grok CLI for SuperGrok and Grok Build, which is experimental. |
 | Kimi Code | What's left of the 5-hour, weekly and monthly limits with reset times, your plan and the extra usage wallet. | A Kimi Code API key. |
@@ -78,7 +78,7 @@ OpenAccs reads local files every minute and asks providers and CLIs every 5 to 1
 
 ## Privacy and safety
 
-- **Claude.** OpenAccs never reads, stores or copies Claude credentials. To open an account, OpenAccs starts the Claude app with `--user-data-dir` set to that profile's folder, and you sign in inside Claude. It never opens Claude's `config.json`, where Claude keeps its encrypted login. For live limits, OpenAccs runs Anthropic's own unmodified `claude` CLI, which signs in through Anthropic's browser page and keeps its own login in a folder of its own. OpenAccs only reads the CLI's answer about usage, and the account and organization in that folder's `.claude.json`, to know whose numbers they are.
+- **Claude.** OpenAccs never reads, stores or copies Claude credentials. Each desktop profile keeps its own sign-in. OpenAccs reads only its non-secret usage history and account identity, never Claude's encrypted `config.json`. For live limits it runs Anthropic's unmodified `claude` CLI with an existing matching sign-in, including the normal terminal sign-in. Optional new connections use the CLI's own browser login and separate folder.
 - **Codex.** OpenAccs keeps each saved Codex sign-in in the macOS Keychain, never in a plain file. The active sign-in stays in `~/.codex/auth.json`, where Codex keeps it anyway. OpenAccs renews the tokens of saved accounts that aren't active through OpenAI's own sign-in server, and it leaves the active sign-in to Codex.
 - **API keys.** OpenAccs keeps Kimi and Z.ai keys in the macOS Keychain. It checks each key with the provider before it saves it, so a mistyped key never becomes an account.
 - **Network.** OpenAccs has no analytics and no telemetry. Once a day it checks for updates at `mikwiseman.github.io` (a feed signed with the OpenAccs key; turn this off in Settings), and every update asks before it installs. While the Instructions window is open, it loads the gallery from `mikwiseman.github.io` and the files in it from `raw.githubusercontent.com`. Otherwise it talks only to `chatgpt.com` and `auth.openai.com` for Codex, `api.kimi.com` or `api.kimi.ai` for Kimi, and `api.z.ai` or `open.bigmodel.cn` for Z.ai. The Claude and Grok CLIs talk to their own servers themselves.
@@ -177,13 +177,17 @@ Close any `codex` sessions in Terminal before you switch, because they keep the 
 
 ### Connect live Claude limits
 
-1. Click Connect under a Claude account that says "No live limits".
+Claude's saved measurements appear automatically. Their timestamp stays visible, and readings older than 30 minutes fade and stop counting toward the best-account recommendation. Refresh rereads these files; it cannot make Claude record a newer measurement. Reset times appear only when known.
+
+OpenAccs also discovers your existing Claude Code sign-in. To add live polling for another account:
+
+1. Open the account's **…** menu and choose **Connect live limits…**.
 2. OpenAccs names the windows that use that account. Click Sign in.
 3. Anthropic's sign-in page for Claude Code opens in a private window of your browser (Chrome, Brave, Edge or Firefox). Sign in there with that account.
 
 Private windows share one sign-in, so close any other private windows first and connect one account at a time. Safari and other browsers open the page in a normal window. If claude.ai there says "Unable to access Claude Code", it's signed in to another account. Click Copy link and open the link in a private window.
 
-OpenAccs checks the account and the organization that Claude Code signed in to, and it refuses to show another account's limits. Every window of that account then shows live limits with reset times and your plan, including windows you add later. If Claude Code later says the sign-in ended, or doesn't answer for 30 minutes, the row says so and offers Connect again.
+OpenAccs checks both the account and organization before showing live limits. Every window of that account shares the connection, including windows added later. If it stops answering, the menu returns to dated desktop measurements and keeps Connect available in **…**.
 
 ### Add a Kimi Code or Z.ai key
 
@@ -205,6 +209,7 @@ OpenAccs installs the `openaccs` command in `~/.local/bin` when that folder exis
 openaccs                    # what's left on every account, and when it comes back
 openaccs best claude        # the Claude account with the most left
 openaccs use work           # open the "work" Claude profile, or switch Codex to it
+openaccs launch --all --json # open saved Claude profiles; leave running ones untouched
 openaccs use --best codex   # switch Codex to the account with the most left
 openaccs status --json      # the same data for scripts
 ```
@@ -215,6 +220,7 @@ openaccs status --json      # the same data for scripts
 | `openaccs best <provider> [--json]` | The account with the most left. |
 | `openaccs use <account> [--yes]` | Claude: open that profile. Codex: switch to it (asks first unless you pass `--yes`). Others: open the usage page. `switch` and `open` work too. |
 | `openaccs use --best <provider> [--yes]` | The same, for the account with the most left. |
+| `openaccs launch <account>… [--json]` or `openaccs launch --all [--json]` | Open selected or all saved Claude profiles in the background. Running profiles are skipped, even with pending changes. Quote names containing spaces. |
 | `openaccs restart <account>` | Restart a Claude profile so it loads new sessions. |
 | `openaccs refresh [--json]` | Ask every provider now, then show the status. |
 | `openaccs connect <account>` | Connect live Claude limits for that account and all its windows (one Claude Code sign-in in the browser). |
@@ -223,9 +229,13 @@ openaccs status --json      # the same data for scripts
 
 An `<account>` is a name or a unique part of it, `provider:name`, or the number that `status` shows. If OpenAccs isn't running, the command starts it in the background. The exit code is 0 on success, 1 on an error, 2 on a usage mistake and 3 when OpenAccs can't be reached. You can also run the command as `/Applications/OpenAccs.app/Contents/MacOS/OpenAccs cli <command>`.
 
+`launch --json` returns a `results` array with each profile's `id`, `label`, `status` (`opened`, `already_open` or `failed`), and `pid` or `error`. Repeated or concurrent commands keep one process per profile. The whole selection is checked before launch; one launch failure doesn't stop the remaining profiles.
+
 ### Manage accounts
 
-Right-click any account to rename it, change its color or remove it. For a Claude account, you can also show its data folder. Removing an account never signs it out.
+Open an account's **…** menu to rename it, change its color or remove it. Removal asks you to confirm the named account. Removing Claude leaves its profile and shared history on disk. Its menu also offers Show Data Folder and Restart Claude.
+
+New Claude profiles hide Claude's menu-bar icon by default; OpenAccs remains in the menu bar. An explicit shared preference is preserved. To change an existing window without restarting, use Claude → Settings → System → Menu bar.
 
 ## FAQ
 
@@ -255,7 +265,7 @@ No. Codex keeps local history in `~/.codex` for all accounts, and OpenAccs only 
 
 ### How do I see when my Claude 5-hour limit resets?
 
-Click Connect on the Claude account and sign in to Claude Code once. OpenAccs then shows your live limits and when they reset, every 5 minutes, in every window of that account. Until then the row says "No live limits", and it shows when a limit comes back only after a session runs into it.
+OpenAccs shows Claude's saved measurements automatically, with their age. It reuses an existing matching Claude Code sign-in for live updates. For another account, **… → Connect live limits…** adds optional polling and reset times.
 
 ### How do I check my Claude and Codex limits from the terminal?
 
@@ -303,12 +313,12 @@ Yes. OpenAccs is free and open source under the MIT license.
 
 ## Limitations
 
-- A Claude window that is already open shows changes from your other windows only after it restarts. OpenAccs restarts it for you when you switch to it and nothing runs in it; otherwise it shows what's waiting, with a Restart link.
+- A Claude window loads shared changes after a restart. Switching can restart an idle window; **… → Restart Claude…** asks first. The coordinator command `launch` never restarts a running profile.
 - Don't continue the same session in two Claude windows at once. Both windows write to the same transcript, and the conversation splits into two.
 - Claude sign-in links (Google, SSO and the email link) and notification clicks go to the Claude window that opened first. Use Continue with email and the code when another Claude window is open.
 - Every Claude window has the same icon in the Dock and in the app switcher. Use OpenAccs to pick the right one.
 - Each Claude profile downloads its own Cowork virtual machine of about 12 GB.
-- Claude limits need one Claude Code sign-in per account. Until then the row shows no numbers, only the time a limit comes back once a session runs into it. OpenAccs doesn't show the numbers the Claude app saves, because the app saves them only now and then, so they can be hours old.
+- Claude's saved measurements can be hours old and contain no reset times. OpenAccs labels their age, fades old readings and drops a window after its duration passes. Live polling needs a matching Claude Code sign-in; it never copies desktop credentials.
 - A Codex switch quits and reopens the ChatGPT app. OpenAccs won't switch while a `codex` session runs in Terminal, because that session would keep the old account.
 - OpenAccs switches only Codex sign-ins stored in `~/.codex/auth.json`. It won't switch when Codex keeps its sign-in in the keychain (`cli_auth_credentials_store` in `~/.codex/config.toml`) or in `~/.codex/secrets`.
 - The Grok CLI option relies on an undocumented billing call, so it is experimental.

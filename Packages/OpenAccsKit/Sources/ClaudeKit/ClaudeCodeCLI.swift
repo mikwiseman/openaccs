@@ -104,7 +104,9 @@ public struct ClaudeCodeCLI: Sendable {
 
     /// Who the CLI is signed in as: `<dir>/.claude.json` `oauthAccount`. nil when not signed in.
     public func identity(configDir: URL) -> ClaudeCLIIdentity? {
-        guard let data = try? Data(contentsOf: configDir.appending(path: ".claude.json")),
+        let file = configDir.standardizedFileURL == paths.claudeSharedConfigDir.standardizedFileURL
+            ? paths.home.appending(path: ".claude.json") : configDir.appending(path: ".claude.json")
+        guard let data = try? Data(contentsOf: file),
               let account = JSON.object(data)?["oauthAccount"] as? [String: Any] else { return nil }
         return ClaudeCLIIdentity(
             email: account["emailAddress"] as? String, organization: account["organizationName"] as? String,
@@ -117,6 +119,7 @@ public struct ClaudeCodeCLI: Sendable {
     /// account has no other. Reads each folder's `.claude.json` once.
     public func signIns(_ dirs: [String], for keys: Set<ClaudeAccountKey>, signedOut: Set<String> = []) -> [ClaudeAccountKey: String] {
         var result: [ClaudeAccountKey: String] = [:], read = Set<String>()
+        let dirs = dirs + [paths.claudeSharedConfigDir.path]
         for dir in dirs.filter({ !signedOut.contains($0) }) + dirs.filter({ signedOut.contains($0) }) where read.insert(dir).inserted {
             guard let who = identity(configDir: URL(filePath: dir, directoryHint: .isDirectory)) else { continue }
             for key in keys where result[key] == nil && who.matches(key) { result[key] = dir }
@@ -170,7 +173,10 @@ public struct ClaudeCodeCLI: Sendable {
 
     /// The CLI's environment minus every CLAUDE_*/ANTHROPIC_* variable, plus this account's config dir.
     func environment(_ configDir: URL) -> [String: String] {
-        ProcessRunner.cleanEnvironment(adding: ["CLAUDE_CONFIG_DIR": configDir.path])
+        // The native CLI's default sign-in has its own Keychain name. Setting CLAUDE_CONFIG_DIR,
+        // even to ~/.claude, would ask for a different login.
+        ProcessRunner.cleanEnvironment(adding: configDir.standardizedFileURL == paths.claudeSharedConfigDir.standardizedFileURL
+                                       ? [:] : ["CLAUDE_CONFIG_DIR": configDir.path])
     }
 
     /// An empty working folder, so the CLI never picks up a project's settings or hooks.

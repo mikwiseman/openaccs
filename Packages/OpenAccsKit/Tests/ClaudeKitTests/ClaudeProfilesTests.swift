@@ -186,8 +186,9 @@ import Testing
         let profiles = ClaudeProfiles(
             paths: home.paths,
             processes: { launched.isSet ? [claudeProcess(pid: 10, dataDir: nil), claudeProcess(pid: 77, dataDir: custom)] : [claudeProcess(pid: 10, dataDir: nil)] },
-            launch: { _, arguments, _ in
+            launch: { _, arguments, activate, _ in
                 #expect(arguments == ["--user-data-dir=\(custom.path)"])
+                #expect(activate)
                 launched.set()   // and never calls back, like the real launch here
             }
         )
@@ -199,11 +200,11 @@ import Testing
         let home = try TempHome()
         let custom = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
         struct Broken: Error {}
-        let failing = ClaudeProfiles(paths: home.paths, processes: { [] }, launch: { _, _, done in done(Broken()) })
+        let failing = ClaudeProfiles(paths: home.paths, processes: { [] }, launch: { _, _, _, done in done(Broken()) })
         await #expect(throws: Broken.self) {
             try await failing.open(failing.resolve(ClaudeAccountInfo(dataDir: custom.path)), timeout: .seconds(5))
         }
-        let silent = ClaudeProfiles(paths: home.paths, processes: { [] }, launch: { _, _, _ in })
+        let silent = ClaudeProfiles(paths: home.paths, processes: { [] }, launch: { _, _, _, _ in })
         await #expect(throws: ClaudeLaunchError.didNotStart) {
             try await silent.open(silent.resolve(ClaudeAccountInfo(dataDir: custom.path)), timeout: .milliseconds(600))
         }
@@ -216,6 +217,33 @@ import Testing
         #expect(profiles.launchArguments(for: profiles.resolve(ClaudeAccountInfo())) == [])
         #expect(profiles.launchArguments(for: profiles.resolve(ClaudeAccountInfo(dataDir: home.paths.claudeDefaultDataDir.path))) == [])
         #expect(profiles.launchArguments(for: profiles.resolve(ClaudeAccountInfo(dataDir: custom.path))) == ["--user-data-dir=\(custom.path)"])
+    }
+
+    @MainActor @Test func backgroundOpenLeavesAnExistingProcessUntouched() async throws {
+        let home = try TempHome()
+        let custom = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
+        let profiles = ClaudeProfiles(paths: home.paths, processes: { [claudeProcess(pid: 77, dataDir: custom)] },
+                                      launch: { _, _, _, _ in Issue.record("Launched a second process") })
+        let profile = profiles.resolve(ClaudeAccountInfo(dataDir: custom.path))
+        for _ in 0..<3 { #expect(try await profiles.open(profile, activate: false) == 77) }
+    }
+
+    @MainActor @Test func backgroundOpenLaunchesWithoutActivationAndRefusesUnknownProcesses() async throws {
+        let home = try TempHome()
+        let custom = home.url.appending(path: "Profiles/p/Data", directoryHint: .isDirectory)
+        let launched = Flag()
+        let profiles = ClaudeProfiles(paths: home.paths,
+            processes: { launched.isSet ? [claudeProcess(pid: 77, dataDir: custom)] : [] },
+            launch: { _, _, activate, _ in
+                #expect(!activate)
+                launched.set()
+            })
+        #expect(try await profiles.open(profiles.resolve(ClaudeAccountInfo(dataDir: custom.path)), activate: false) == 77)
+        let unknown = ClaudeProfiles(paths: home.paths, processes: { [ClaudeProcess(pid: 1, arguments: nil, launchDate: nil)] },
+                                    launch: { _, _, _, _ in Issue.record("Launched with an unidentified process") })
+        await #expect(throws: ClaudeLaunchError.alreadyRunning) {
+            try await unknown.open(unknown.resolve(ClaudeAccountInfo(dataDir: custom.path)), activate: false)
+        }
     }
 
     @Test func discoversDefaultAndContextSwitcherProfilesWithLauncherLabels() throws {

@@ -11,7 +11,7 @@ import SetupKit
 /// Draws through an offscreen NSHostingView rather than ImageRenderer, because ImageRenderer
 /// can't draw AppKit-backed controls (text fields come out as placeholders).
 enum Snapshot {
-    @MainActor static func runIfRequested(live: () -> any PanelModel) {
+    @MainActor static func runIfRequested(live: (_ readOnly: Bool) -> any PanelModel) {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--snapshot") else { return }
         guard args.indices.contains(i + 1) else { fail("--snapshot needs a file path") }
@@ -25,7 +25,12 @@ enum Snapshot {
         }
 
         NSApplication.shared.setActivationPolicy(.prohibited)
-        let model: any PanelModel = args.contains("--demo") ? DemoModel() : live()
+        #if DEBUG
+        let interactive = args.contains("--interactive") && Paths.isOverridden
+        #else
+        let interactive = false
+        #endif
+        let model: any PanelModel = args.contains("--demo") ? DemoModel() : live(!interactive)
         // A live model loads asynchronously; give it up to 30 s.
         if let live = model as? AppModel {
             let deadline = Date().addingTimeInterval(30)
@@ -75,10 +80,11 @@ enum Snapshot {
         do { try png.write(to: out) } catch { fail(error.localizedDescription) }
         #if DEBUG
         // Keep the rendered fixture available to background UI automation, without taking focus.
-        if args.contains("--interactive"), Paths.isOverridden {
+        if interactive {
+            if let model = model as? AppModel { ControlHandler.start(model: model) }
             NSApplication.shared.setActivationPolicy(.accessory)
             window.styleMask = [.titled, .closable]
-            window.title = "OpenAccs Setup — test"
+            window.title = "OpenAccs — Test profiles"
             window.orderBack(nil)
             NSApplication.shared.run()
         }

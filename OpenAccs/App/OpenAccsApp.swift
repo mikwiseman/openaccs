@@ -19,7 +19,7 @@ struct OpenAccsApp: App {
     @State private var setup = SetupModel(context: { SetupService.context() }, scan: OneSetup.scan)
 
     init() {
-        Snapshot.runIfRequested(live: { AppModel(readOnly: true) })
+        Snapshot.runIfRequested(live: { AppModel(readOnly: $0) })
         _model = State(initialValue: Self.makeModel())
     }
 

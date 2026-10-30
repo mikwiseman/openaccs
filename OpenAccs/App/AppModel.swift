@@ -76,6 +76,8 @@ final class AppModel: PanelModel {
     private var signIns: [ClaudeAccountKey: String] = [:]
     /// Claude Code's last answer for each folder.
     private var claudeCode: [String: ClaudeCodeAnswer] = [:]
+    /// Last measurements already saved by Claude. No credentials or extra sign-in.
+    private var claudeAppUsage: [ClaudeAccountKey: UsageSnapshot] = [:]
     /// Folders being asked now: a refresh never starts a second CLI on one folder.
     private var asking: Set<String> = []
     /// Limits a chat ran into, by account and window: Claude Code's own refusals, read as they happen.
@@ -517,11 +519,19 @@ final class AppModel: PanelModel {
     private func findSignIns() async {
         let infos = claudeAccounts.compactMap { a in a.claude.map { (id: a.id, info: $0) } }, claude = self.claude, cli = claudeCLI
         let signedOut = Set(claudeCode.filter { $0.value.problem == .needsSignIn }.keys)
-        let (keys, found) = await Task.detached {
-            let keys = Dictionary(infos.compactMap { w in claude.resolve(w.info).limitsAccount(addedAs: w.info.accountUuid).map { (w.id, $0) } }) { a, _ in a }
-            return (keys, cli.signIns(infos.compactMap(\.info.cliConfigDir), for: Set(keys.values), signedOut: signedOut))
+        let (keys, found, saved) = await Task.detached {
+            let windows = infos.map { (id: $0.id, info: $0.info, profile: claude.resolve($0.info)) }
+            let keys = Dictionary(windows.compactMap { w in w.profile.limitsAccount(addedAs: w.info.accountUuid).map { (w.id, $0) } }) { a, _ in a }
+            // The history file names only an org. A profile now signed in as someone else cannot
+            // attribute its earlier measurements to that new account.
+            let known = windows.filter { $0.profile.accountUuid?.lowercased() == $0.info.accountUuid?.lowercased() }.map(\.profile)
+            let saved = Dictionary(uniqueKeysWithValues: Set(keys.values).compactMap { key in
+                ClaudeAppUsage.read(profiles: known, account: key).map { (key, $0) }
+            })
+            return (keys, cli.signIns(infos.compactMap(\.info.cliConfigDir), for: Set(keys.values), signedOut: signedOut), saved)
         }.value
         signIns = found
+        claudeAppUsage = saved
         var stored = false
         for i in accounts.indices where accounts[i].claude != nil && accounts[i].claude?.cliConfigDir == nil {
             guard let key = keys[accounts[i].id], let dir = found[key] else { continue }
@@ -623,16 +633,17 @@ final class AppModel: PanelModel {
             var needsSignIn = problems[account.id] == .needsSignIn
             var isLive = false
             if account.provider == .claude {
-                // Claude Code's live numbers, or one line why there are none; a limit a chat of the account ran
-                // into still says exactly when it comes back, on every window of the account.
+                // Prefer live Claude Code numbers, then the desktop app's dated measurements.
+                // A limit hit still supplies its exact reset time to every window of the account.
                 let key = keys[account.id], dir = key.flatMap { signIns[$0] }, answer = dir.flatMap { claudeCode[$0] }
                 let limits = ClaudeLimits.row(account: key != nil, signIn: dir != nil, answer: answer?.usage, problem: answer?.problem, now: now)
-                snapshot = UsageSnapshot.with(Array((key.flatMap { limitHits[$0] } ?? [:]).values), on: limits.usage?.at(now), now: now)
+                let saved = key.flatMap { claudeAppUsage[$0] }.flatMap { ClaudeAppUsage.current($0, now: now) }
+                snapshot = UsageSnapshot.with(Array((key.flatMap { limitHits[$0] } ?? [:]).values), on: limits.usage?.at(now) ?? saved, now: now)
                 isLive = limits.usage != nil
-                error = isLive ? accountNote(account) : limits.note
+                error = snapshot != nil ? accountNote(account) : "Open Claude to read limits"
                 // An open window whose account isn't known yet is still at Claude's sign-in.
-                if key == nil, windows[account.id].map(isRunning) ?? false { error = ClaudeLimits.signInFirst }
-                needsSignIn = limits.connect
+                if key == nil, windows[account.id].map(isRunning) ?? false { error = "Sign in inside Claude" }
+                needsSignIn = snapshot == nil && limits.connect
             }
             var row = PanelRow(
                 id: account.id, provider: account.provider, label: account.label, color: account.color,
@@ -654,7 +665,7 @@ final class AppModel: PanelModel {
         markBest(&rows)
         self.rows = rows
         let claudeRows = rows.filter { $0.provider == .claude }
-        // The rings show live numbers only; without them they draw the "unknown" outline.
+        // The rings use recent measurements only; stale or missing numbers draw an unknown outline.
         menuBarUsage = (claudeRows.first { $0.id == lastClaude } ?? claudeRows.first { $0.state == .running } ?? claudeRows.first)?
             .usage.flatMap { $0.isCurrent(now: now) ? $0 : nil }
     }
@@ -699,6 +710,33 @@ final class AppModel: PanelModel {
     }
 
     // MARK: Actions
+
+    /// Coordinator launch: wait for any operation already in flight, then inspect the actual process.
+    /// Open profiles are untouched, even with pending sync changes or unknown limits.
+    func launch(_ id: UUID) async throws -> ControlLaunchResult {
+        guard let account = accounts.first(where: { $0.id == id }), let p = profile(account) else {
+            throw AppError.accountRemoved
+        }
+        let path = p.dataDir.standardizedFileURL.path
+        while claudeBusy.contains(path) { try await Task.sleep(for: .milliseconds(100)) }
+        guard accounts.contains(where: { $0.id == id }) else { throw AppError.accountRemoved }
+        claudeBusy.insert(path)
+        defer { claudeBusy.remove(path) }
+        refreshRunning()
+        if let pid = runningClaude[path] {
+            rebuild()
+            return ControlLaunchResult(id: id, label: account.label, status: .alreadyOpen, pid: pid)
+        }
+        openingNow.insert(id)
+        defer { openingNow.remove(id) }
+        await syncClaude()
+        guard let current = accounts.first(where: { $0.id == id }) else { throw AppError.accountRemoved }
+        guard current.claude?.legacyConfigDir == nil else { throw AppError.migrationFailed }
+        let pid = try await claude.open(profile(current) ?? p, activate: false)
+        refreshRunning()
+        rebuild()
+        return ControlLaunchResult(id: id, label: current.label, status: .opened, pid: pid)
+    }
 
     func open(_ id: UUID) async throws {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
@@ -843,7 +881,7 @@ final class AppModel: PanelModel {
         // takes them from, else the window used last (its pins too, with pin sync). Its account's own settings follow
         // once it is signed in, at its first restart.
         let source = claudeAccounts.first { profile($0)?.isDefault == true } ?? claudeAccounts.first { $0.id == lastClaude } ?? claudeAccounts.first
-        if let source = source.flatMap(profile) { try? AppSettings.seed(dir, from: source.dataDir, pins: syncPins) }
+        try AppSettings.seed(dir, from: source.flatMap(profile)?.dataDir, pins: syncPins)
         let account = Account(id: id, provider: .claude, label: label.isEmpty ? "Claude" : label, color: nextColor(),
                               claude: ClaudeAccountInfo(dataDir: dir.path))
         accounts.insert(account, at: (accounts.lastIndex { $0.provider == .claude }).map { $0 + 1 } ?? 0)
@@ -1004,6 +1042,7 @@ enum AppError: LocalizedError {
     case noClaudeCode
     case migrationFailed
     case testHome
+    case accountRemoved
 
     var errorDescription: String? {
         switch self {
@@ -1013,6 +1052,7 @@ enum AppError: LocalizedError {
         case .keyRejected(let name): "\(name) didn't accept this key."
         case .migrationFailed: "Couldn't move this profile's history into ~/.claude, so it wasn't opened on the shared folder."
         case .testHome: "Codex doesn't switch with a test home (OPENACCS_HOME)."
+        case .accountRemoved: "That Claude profile is no longer in OpenAccs."
         case .wrongAccount(let actual, let names, let privately):
             "Claude Code signed in as \(actual ?? "another account"), not the account you use in \(names). "
                 + (privately ? "Close every private window, then try again."

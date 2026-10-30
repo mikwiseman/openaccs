@@ -7,7 +7,7 @@ import Foundation
 /// Actions name accounts by id; the CLI resolves names with `AccountMatch` first.
 public struct ControlRequest: Codable, Sendable, Equatable {
     public enum Command: String, Codable, Sendable {
-        case status, refresh, open, restart, connect, rename, remove, add
+        case status, refresh, open, launch, restart, connect, rename, remove, add
     }
 
     /// What `add` adds.
@@ -42,11 +42,31 @@ public struct ControlResponse: Codable, Sendable, Equatable {
     public var accounts: [ControlAccount]
     /// Something the user should know that isn't about one account.
     public var notice: String?
+    public var launch: ControlLaunchResult?
 
-    public init(error: String? = nil, accounts: [ControlAccount] = [], notice: String? = nil) {
+    public init(error: String? = nil, accounts: [ControlAccount] = [], notice: String? = nil, launch: ControlLaunchResult? = nil) {
         self.error = error
         self.accounts = accounts
         self.notice = notice
+        self.launch = launch
+    }
+}
+
+/// The outcome of ensuring one saved Claude profile is open. No sign-in or quota inference.
+public struct ControlLaunchResult: Codable, Sendable, Equatable {
+    public enum Status: String, Codable, Sendable { case opened, alreadyOpen = "already_open", failed }
+    public var id: UUID
+    public var label: String
+    public var status: Status
+    public var pid: Int32?
+    public var error: String?
+
+    public init(id: UUID, label: String, status: Status, pid: Int32? = nil, error: String? = nil) {
+        self.id = id
+        self.label = label
+        self.status = status
+        self.pid = pid
+        self.error = error
     }
 }
 

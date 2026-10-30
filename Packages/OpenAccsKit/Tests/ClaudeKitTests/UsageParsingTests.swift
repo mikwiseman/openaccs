@@ -81,6 +81,19 @@ private func iso(_ string: String) -> Date {
 }
 
 @Suite struct ClaudeCodeCLITests {
+    @Test func existingDefaultSignInUsesItsNativeIdentityAndEnvironment() throws {
+        let home = try TempHome()
+        try home.writeJSON(".claude.json", ["oauthAccount": ["accountUuid": "account", "organizationUuid": "org"]])
+        let cli = ClaudeCodeCLI(paths: home.paths)
+        let dir = home.paths.claudeSharedConfigDir
+        #expect(cli.identity(configDir: dir)?.accountUuid == "account")
+        #expect(cli.environment(dir)["CLAUDE_CONFIG_DIR"] == nil)
+        let key = try #require(ClaudeAccountKey(account: "account", org: "org"))
+        #expect(cli.signIns([], for: [key])[key] == dir.path)
+        let other = try #require(ClaudeAccountKey(account: "another-account", org: "org"))
+        #expect(cli.signIns([], for: [other]).isEmpty)
+    }
+
     @discardableResult
     func executable(_ home: TempHome, _ relative: String) throws -> URL {
         let file = try home.write(relative, "#!/bin/sh\n")
