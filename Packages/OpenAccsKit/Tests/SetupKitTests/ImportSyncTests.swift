@@ -37,12 +37,77 @@ private func row(_ provider: String?, _ type: String, _ name: String, cwd: Strin
     return "{\"provider_id\":\(json(provider)),\"item_type\":\"\(type)\",\"cwd\":\(json(cwd)),\"source\":\"\(name)\",\"target\":\"\(name)\"}"
 }
 
-/// A fake `run` where sqlite3 prints these rows, the way it does: nothing at all for none.
-private func sqlite(_ rows: [String], calls: Calls? = nil) -> @Sendable ([String]) -> (status: Int32, output: String)? {
-    let output = rows.isEmpty ? "" : "[" + rows.joined(separator: ",\n") + "]\n"
+/// A fake `run` where sqlite3 prints these rows, the way it does: nothing at all for none. The chats query gets
+/// `chats`, the ledger query `rows`.
+private func sqlite(_ rows: [String], chats: [String] = [], calls: Calls? = nil) -> @Sendable ([String]) -> (status: Int32, output: String)? {
+    let json = { (rows: [String]) in rows.isEmpty ? "" : "[" + rows.joined(separator: ",\n") + "]\n" }
+    let ledger = json(rows), chats = json(chats)
     return { argv in
         calls?.argv.append(argv)
-        return argv.first == "sqlite3" ? (0, output) : nil
+        guard argv.first == "sqlite3" else { return nil }
+        return (0, argv.last == ImportSyncSetup.chatsQuery ? chats : ledger)
+    }
+}
+
+/// One chat Import made from a Claude session, as the chats query prints it.
+private func chat(_ id: String, recency: Int = 1000, continued: Bool = false) -> String {
+    "{\"id\":\"\(id)\",\"recency\":\(recency),\"continued\":\(continued ? 1 : 0)}"
+}
+
+/// Runs the real sqlite3.
+private func realSqlite(_ argv: [String]) -> (status: Int32, output: String)? {
+    guard argv.first == "sqlite3" else { return nil }
+    let process = Process()
+    process.executableURL = URL(filePath: "/usr/bin/sqlite3")
+    process.arguments = Array(argv.dropFirst())
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+}
+
+/// Codex's state_5.sqlite in a test home, in write-ahead log mode as Codex keeps it, with the columns the queries
+/// read, and without the log's -wal and -shm files, as Codex leaves them when it closes the database (the sqlite3
+/// tool keeps them). Its `run` is the real sqlite3, and `codex archive` and `codex unarchive` as Codex does them:
+/// they refuse a chat that is already there.
+private struct CodexDatabase {
+    let path: String
+
+    init(_ home: SetupHome, _ rows: String) throws {
+        path = home.path(".codex/state_5.sqlite")
+        try FileManager.default.createDirectory(at: home.url.appending(path: ".codex"), withIntermediateDirectories: true)
+        let schema = """
+            PRAGMA journal_mode = WAL;
+            CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
+                recency_at_ms INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE external_agent_config_imports (import_id TEXT PRIMARY KEY, completed_at_ms INTEGER NOT NULL,
+                successes TEXT NOT NULL, failures TEXT NOT NULL, provider_id TEXT);
+
+            """
+        try #require(realSqlite(["sqlite3", path, schema + rows])?.status == 0)
+        for suffix in ["-wal", "-shm"] { try FileManager.default.removeItem(atPath: path + suffix) }
+    }
+
+    func execute(_ sql: String) { _ = realSqlite(["sqlite3", path, sql]) }
+
+    /// The ids of archived chats, sorted.
+    var archived: [String] {
+        (realSqlite(["sqlite3", path, "SELECT id FROM threads WHERE archived = 1 ORDER BY id"])?.output ?? "").split(separator: "\n").map(String.init)
+    }
+
+    func run(calls: Calls? = nil) -> @Sendable ([String]) -> (status: Int32, output: String)? {
+        let path = self.path
+        return { argv in
+            calls?.argv.append(argv)
+            if argv.first == "sqlite3" { return realSqlite(argv) }
+            guard argv.first == "codex", argv.count == 3, ["archive", "unarchive"].contains(argv[1]) else { return nil }
+            let archived = argv[1] == "archive" ? 1 : 0
+            let changed = realSqlite(["sqlite3", path, "UPDATE threads SET archived = \(archived) WHERE id = '\(argv[2])' AND archived != \(archived); SELECT changes();"])
+            return changed?.output.trimmingCharacters(in: .whitespacesAndNewlines) == "1" ? (0, "") : (1, "Error: failed to \(argv[1]) session\n")
+        }
     }
 }
 
@@ -193,9 +258,10 @@ url = "https://mcp.linear.app/mcp"
             calls.argv.append(argv)
             return nil
         })
-        // Immutable, because a plain read-only open fails while ChatGPT has the database open.
-        let database = URL(filePath: home.path(".codex/state_5.sqlite")).absoluteString + "?immutable=1"
-        #expect(calls.argv == [["sqlite3", "-readonly", "-json", database, ImportSyncSetup.query]])
+        // A plain open first, for ChatGPT's newest writes; immutable when that fails, as it can while ChatGPT has
+        // the database open.
+        let file = home.path(".codex/state_5.sqlite")
+        #expect(calls.argv == [file, URL(filePath: file).absoluteString + "?immutable=1"].map { ["sqlite3", "-readonly", "-json", $0, ImportSyncSetup.query] })
         #expect(noSqlite.summary == "Keep imports in sync is on")
         #expect(noSqlite.changes.map(\.id) == ["importSync.turn-off"] && noSqlite.items.isEmpty)
 
@@ -206,6 +272,181 @@ url = "https://mcp.linear.app/mcp"
         let bare = try SetupHome()
         try bare.write(".agents/skills/synced/org_acct/pdf/SKILL.md", "Codex reads PDFs.\n")
         #expect(ImportSyncSetup.scan(bare.context { _ in nil }) == AreaReport(area: .importSync, summary: "Not used"))
+    }
+
+    @Test func copiedChatsAreArchivedButOnesCodexContinuedStay() throws {
+        let home = try SetupHome()
+        try home.write(".codex/config.toml", config)
+        let rows = [row("claude-code", "SESSIONS", "t1", cwd: "/code/a"), row("claude-code", "SESSIONS", "t3", cwd: "/code/b")]
+        let chats = [chat("t1", recency: 3000), chat("t2", recency: 2000), chat("t3", recency: 5000, continued: true)]
+        let calls = Calls()
+        let report = ImportSyncSetup.scan(home.context(run: sqlite(rows, chats: chats, calls: calls)))
+
+        #expect(calls.argv.last == ["sqlite3", "-readonly", "-json", home.path(".codex/state_5.sqlite"), ImportSyncSetup.chatsQuery])
+        #expect(report.summary == "Keep imports in sync is on · 2 copied chats")
+        let change = try #require(report.changes.first { $0.id == "importSync.archive-chats" })
+        #expect(report.changes.map(\.id) == ["importSync.turn-off", "importSync.archive-chats"])
+        #expect(change.title == "Archive 2 chats ChatGPT Import copied into Codex")
+        #expect(change.detail == "They move to Archived chats in Codex, where each one can be restored. "
+            + "The sessions they were copied from stay where they are. 1 that Codex continued stays.")
+        #expect(change.operations == [FileOperation.codexChat(id: "t1", archive: true, recency: 3000), .codexChat(id: "t2", archive: true, recency: 2000)])
+        #expect(change.waitsFor == .chatGPT && change.requires == ["importSync.turn-off"])
+        #expect(report.items == [SetupItem(id: "importSync.chats", name: "Chats", claude: .notShared, codex: .same,
+                                           note: "3 still in Codex's list; Codex continued 1")])
+
+        // Only chats Codex continued: nothing to archive, and the row still says so.
+        let kept = ImportSyncSetup.scan(home.context(run: sqlite(rows, chats: [chat("t3", continued: true)])))
+        #expect(kept.changes.map(\.id) == ["importSync.turn-off"])
+        #expect(kept.summary == "Keep imports in sync is on · nothing left over")
+        #expect(kept.items.map(\.note) == ["1 still in Codex's list; Codex continued 1"])
+
+        let single = ImportSyncSetup.scan(home.context(run: sqlite(rows, chats: [chat("t1")])))
+        let one = try #require(single.changes.first { $0.id == "importSync.archive-chats" })
+        #expect(single.summary == "Keep imports in sync is on · 1 copied chat")
+        #expect(one.title == "Archive 1 chat ChatGPT Import copied into Codex")
+        #expect(one.detail == "It moves to Archived chats in Codex, where it can be restored. The session it was copied from stays where it is.")
+
+        // When the plain open fails, the immutable one is read instead.
+        let plainFails = sqlite(rows, chats: chats)
+        let fallback = ImportSyncSetup.scan(home.context { argv in
+            argv.count > 3 && !argv[3].hasSuffix("?immutable=1") ? (1, "Error: unable to open database file\n") : plainFails(argv)
+        })
+        #expect(fallback.changes.map(\.id) == ["importSync.turn-off", "importSync.archive-chats"])
+
+        // Chats that can't be read: no change, and nothing said about what is left over.
+        let ledgerOnly = sqlite(rows)
+        let unreadable = ImportSyncSetup.scan(home.context { argv in
+            argv.last == ImportSyncSetup.chatsQuery ? (1, "Parse error: no such column: t.recency_at_ms\n") : ledgerOnly(argv)
+        })
+        #expect(unreadable.summary == "Keep imports in sync is on" && unreadable.changes.map(\.id) == ["importSync.turn-off"])
+        #expect(unreadable.items.isEmpty)
+
+        // A ledger without sessions never asks about chats.
+        let noSessions = Calls()
+        _ = ImportSyncSetup.scan(home.context(run: sqlite([row("cursor", "SKILLS", "canvas")], chats: chats, calls: noSessions)))
+        #expect(!noSessions.argv.contains { $0.last == ImportSyncSetup.chatsQuery })
+    }
+
+    @Test func theChatsQueryFindsCopiesCodexNeverContinued() throws {
+        let home = try SetupHome()
+        try home.write(".codex/config.toml", config.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
+        let codex = try CodexDatabase(home, """
+            INSERT INTO threads VALUES
+                ('copied', 'Fix the panel', 0, 1000), ('grown', 'Went on in Claude', 0, 2500),
+                ('continued', 'Asked in Codex', 0, 2600), ('archived', 'Archived before', 1, 1000), ('native', 'Codex''s own', 0, 5000);
+            INSERT INTO external_agent_config_imports VALUES
+                ('a', 2000, '[{"item_type":"SESSIONS","cwd":"/code","source":"/s/1.jsonl","target":"copied"},
+                    {"item_type":"SESSIONS","source":"/s/2.jsonl","target":"grown"},
+                    {"item_type":"SESSIONS","source":"/s/3.jsonl","target":"continued"},
+                    {"item_type":"SESSIONS","source":"/s/4.jsonl","target":"archived"},
+                    {"item_type":"SESSIONS","source":"/s/5.jsonl","target":"deleted"},
+                    {"item_type":"SKILLS","source":"canvas","target":"canvas"}]', '[]', 'claude-code'),
+                ('b', 3000, '[{"item_type":"SESSIONS","source":"/s/2.jsonl","target":"grown"}]', '[]', 'claude-code'),
+                ('c', 3500, 'not json', '[]', 'claude-code');
+            """)
+        let calls = Calls()
+        let report = ImportSyncSetup.scan(home.context(run: codex.run(calls: calls)))
+        let change = try #require(report.changes.first { $0.id == "importSync.archive-chats" })
+        // Newest first; "grown" was imported again after Claude went on, so nothing in Codex touched it.
+        #expect(change.operations == [FileOperation.codexChat(id: "grown", archive: true, recency: 2500), .codexChat(id: "copied", archive: true, recency: 1000)])
+        #expect(report.items.map(\.note) == ["3 still in Codex's list; Codex continued 1"])
+        #expect(report.summary == "Off · 2 copied chats")
+        // Without the log's files the plain open fails, and the immutable one reads every write.
+        let file = home.path(".codex/state_5.sqlite")
+        #expect(calls.argv.filter { $0.last == ImportSyncSetup.chatsQuery }.map { $0[3] } == [file, URL(filePath: file).absoluteString + "?immutable=1"])
+    }
+
+    @Test func archivingWaitsForChatGPTAndUndoBringsEachChatBack() throws {
+        let home = try SetupHome()
+        try home.write(".codex/config.toml", config.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
+        let codex = try CodexDatabase(home, """
+            INSERT INTO threads VALUES ('c1', 'First', 0, 1000), ('c2', 'Second', 0, 900), ('mine', 'Codex''s own', 0, 5000);
+            INSERT INTO external_agent_config_imports VALUES ('a', 2000,
+                '[{"item_type":"SESSIONS","target":"c1"},{"item_type":"SESSIONS","target":"c2"}]', '[]', 'claude-code');
+            """)
+        let calls = Calls()
+        let report = ImportSyncSetup.scan(home.context(run: codex.run(calls: calls)))
+        #expect(report.summary == "Off · 2 copied chats" && report.attention.isEmpty)
+        let change = try #require(report.changes.first)
+        #expect(report.changes.count == 1 && change.id == "importSync.archive-chats" && change.requires.isEmpty)
+
+        let open = SetupApplier(context: home.context(running: [.chatGPT], run: codex.run(calls: calls))).apply([change])
+        #expect(open.applied.isEmpty && open.skipped.map(\.reason) == ["waits for ChatGPT to close"])
+        #expect(!calls.argv.contains { $0.first == "codex" } && codex.archived.isEmpty)
+
+        let applier = SetupApplier(context: home.context(run: codex.run(calls: calls)))
+        let result = applier.apply([change])
+        #expect(result.applied.count == 1 && result.skipped.isEmpty)
+        #expect(calls.argv.filter { $0.first == "codex" } == [["codex", "archive", "c1"], ["codex", "archive", "c2"]])
+        #expect(codex.archived == ["c1", "c2"])
+        let after = ImportSyncSetup.scan(home.context(run: codex.run()))
+        #expect(after.changes.isEmpty && after.items.isEmpty && after.summary == "Off · nothing left over")
+
+        calls.argv = []
+        try applier.undo(try #require(result.applied.first).id)
+        #expect(calls.argv.filter { $0.first == "codex" } == [["codex", "unarchive", "c2"], ["codex", "unarchive", "c1"]])
+        #expect(codex.archived.isEmpty)
+        // Brought back by Undo, so never offered again.
+        let undone = ImportSyncSetup.scan(home.context(run: codex.run()))
+        #expect(undone.changes.isEmpty && undone.summary == "Off · nothing left over")
+        #expect(undone.items.map(\.note) == ["2 still in Codex's list; you brought back 2"])
+    }
+
+    @Test func aChatChangedSinceTheReviewIsNeverArchivedBehindYourBack() throws {
+        let home = try SetupHome()
+        try home.write(".codex/config.toml", config.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
+        let codex = try CodexDatabase(home, """
+            INSERT INTO threads VALUES ('c1', 'First', 0, 1000), ('c2', 'Second', 0, 900), ('c3', 'Third', 0, 800), ('c4', 'Fourth', 0, 700);
+            INSERT INTO external_agent_config_imports VALUES ('a', 2000, '[{"item_type":"SESSIONS","target":"c1"},
+                {"item_type":"SESSIONS","target":"c2"},{"item_type":"SESSIONS","target":"c3"},{"item_type":"SESSIONS","target":"c4"}]', '[]', 'claude-code');
+            """)
+        let applier = SetupApplier(context: home.context(run: codex.run()))
+        let plan = { try #require(ImportSyncSetup.scan(home.context(run: codex.run())).changes.first) }
+        let reviewed = try plan()
+        let changed = ["changed since you reviewed it"]
+
+        // Continued in Codex after the review: nothing is archived, and the next plan leaves that chat out.
+        codex.execute("UPDATE threads SET recency_at_ms = 2600 WHERE id = 'c2'")
+        let continued = applier.apply([reviewed])
+        #expect(continued.applied.isEmpty && continued.skipped.map(\.reason) == changed && codex.archived.isEmpty)
+        let withoutC2 = try plan()
+        #expect(withoutC2.operations.map { guard case .codexChat(let id, true, _) = $0 else { return "?" }; return id } == ["c1", "c3", "c4"])
+
+        // Deleted after the review: nothing is archived either.
+        codex.execute("DELETE FROM threads WHERE id = 'c4'")
+        #expect(applier.apply([withoutC2]).skipped.map(\.reason) == changed && codex.archived.isEmpty)
+
+        // Archived by hand after the review: left as it is, the rest is archived, and Undo brings back only that.
+        let fresh = try plan()
+        #expect(fresh.operations == [FileOperation.codexChat(id: "c1", archive: true, recency: 1000), .codexChat(id: "c3", archive: true, recency: 800)])
+        codex.execute("UPDATE threads SET archived = 1 WHERE id = 'c3'")
+        let result = applier.apply([fresh])
+        #expect(result.applied.count == 1 && result.skipped.isEmpty && codex.archived == ["c1", "c3"])
+        #expect(result.applied.first?.undo == [FileOperation.codexChat(id: "c1", archive: false, recency: 1000)])
+        try applier.undo(try #require(result.applied.first).id)
+        #expect(codex.archived == ["c3"])
+    }
+
+    @Test func aChatBroughtBackByHandStaysAndUndoStillWorks() throws {
+        let home = try SetupHome()
+        try home.write(".codex/config.toml", config.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
+        let codex = try CodexDatabase(home, """
+            INSERT INTO threads VALUES ('c1', 'First', 0, 1000), ('c2', 'Second', 0, 900);
+            INSERT INTO external_agent_config_imports VALUES ('a', 2000,
+                '[{"item_type":"SESSIONS","target":"c1"},{"item_type":"SESSIONS","target":"c2"}]', '[]', 'claude-code');
+            """)
+        let applier = SetupApplier(context: home.context(run: codex.run()))
+        let result = applier.apply([try #require(ImportSyncSetup.scan(home.context(run: codex.run())).changes.first)])
+        #expect(codex.archived == ["c1", "c2"])
+
+        codex.execute("UPDATE threads SET archived = 0 WHERE id = 'c2'")
+        let again = ImportSyncSetup.scan(home.context(run: codex.run()))
+        #expect(again.changes.isEmpty && again.summary == "Off · nothing left over")
+        #expect(again.items.map(\.note) == ["1 still in Codex's list; you brought back 1"])
+
+        // Undo brings back the other one and leaves the one already back as it is.
+        try applier.undo(try #require(result.applied.first).id)
+        #expect(codex.archived.isEmpty)
     }
 
     @Test func appliesThenFindsNothingLeftAndUndoesByteForByte() throws {

@@ -5,7 +5,7 @@ import OpenAccsCore
 import Security
 import SQLite3
 
-/// Read-only use of the selected Claude desktop session. No browser search, token refresh, or cookie cache.
+/// Access through the selected Claude desktop session. No browser search, token refresh, or cookie cache.
 public actor ClaudeDesktopUsage {
     private let http: HTTPClient
     private var password: Data?
@@ -17,29 +17,52 @@ public actor ClaudeDesktopUsage {
     }
 
     public func usage(profile: ClaudeProfile, account: ClaudeAccountKey) async throws -> UsageSnapshot {
+        try await fetch(session: session(profile: profile), account: account)
+    }
+
+    /// Discover memberships through the existing desktop login. No sign-in or credential export.
+    public func memberships(profile: ClaudeProfile) async throws -> [ClaudeMembership] {
+        guard let account = profile.accountUuid else { throw UsageError.needsSignIn }
+        return try await fetchMemberships(session: session(profile: profile), account: account)
+    }
+
+    /// Change the current account's native sidebar preferences without exporting its sign-in or
+    /// writing a running app's files. Claude applies its account state when its Code tab initializes.
+    public func chronologicalSidebar(profile: ClaudeProfile, account: ClaudeAccountKey) async throws -> ClaudeSidebarSettings.Result {
+        try await ClaudeSidebarSettings(http: http).apply(session: session(profile: profile), account: account)
+    }
+
+    private func session(profile: ClaudeProfile) throws -> String {
         let cookie = try Self.cookie(in: profile.dataDir)
         if password == nil { password = try Self.safeStorage(allowPrompt: false) }
-        let session = try Self.decrypt(cookie.encrypted, password: password!, host: cookie.host, version: cookie.version)
-        return try await fetch(session: session, account: account)
+        return try Self.decrypt(cookie.encrypted, password: password!, host: cookie.host, version: cookie.version)
+    }
+
+    func fetchMemberships(session: String, account: String) async throws -> [ClaudeMembership] {
+        try ClaudeMembership.parse(await get("/api/account", session: session), account: account)
     }
 
     func fetch(session: String, account: ClaudeAccountKey) async throws -> UsageSnapshot {
-        guard session.hasPrefix("sk-ant-"), !session.contains(where: { $0.isWhitespace || $0 == ";" }) else { throw UsageError.needsSignIn }
         let owner = try await get("/api/account", session: session)
-        guard (owner["uuid"] as? String)?.lowercased() == account.account else { throw UsageError.needsSignIn }
+        guard let membership = try ClaudeMembership.parse(owner, account: account.account).first(where: { $0.key == account }) else {
+            throw UsageError.membershipUnavailable
+        }
         let limits = try await get("/api/organizations/\(account.org)/usage", session: session)
         var result = try ClaudeCodeCLI.parseUsage(["response": ["response": ["rate_limits_available": true, "rate_limits": limits]]], now: Date())
         guard !result.windows.isEmpty else { throw UsageError.noPlan }
+        result.plan = membership.plan
         result.source = "Claude"
         return result
     }
 
     private func get(_ path: String, session: String) async throws -> [String: Any] {
+        guard session.hasPrefix("sk-ant-"), !session.contains(where: { $0.isWhitespace || $0 == ";" }) else { throw UsageError.needsSignIn }
         var request = URLRequest(url: URL(string: "https://claude.ai" + path)!)
         request.setValue("sessionKey=\(session)", forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await http.send(request)
         if response.statusCode == 401 { throw UsageError.needsSignIn }
+        if response.statusCode == 403, path.hasPrefix("/api/organizations/") { throw UsageError.membershipUnavailable }
         guard response.statusCode == 200, let object = JSON.object(data) else {
             throw UsageError.unexpected("Claude could not refresh limits (HTTP \(response.statusCode))")
         }

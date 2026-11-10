@@ -1,5 +1,29 @@
 import Foundation
 
+/// Intended membership and separately observed desktop identity. A PID alone proves neither.
+public struct ControlMembership: Codable, Sendable, Hashable {
+    public var accountUuid: String
+    public var organizationUuid: String
+    public var organizationName: String?
+    public var email: String?
+    public var observedAccountUuid: String?
+    public var observedOrganizationUuid: String?
+    public var verified: Bool
+    public var selected: Bool
+
+    public init(accountUuid: String, organizationUuid: String, organizationName: String? = nil, email: String? = nil,
+                observedAccountUuid: String? = nil, observedOrganizationUuid: String? = nil, verified: Bool, selected: Bool) {
+        self.accountUuid = accountUuid
+        self.organizationUuid = organizationUuid
+        self.organizationName = organizationName
+        self.email = email
+        self.observedAccountUuid = observedAccountUuid
+        self.observedOrganizationUuid = observedOrganizationUuid
+        self.verified = verified
+        self.selected = selected
+    }
+}
+
 // MARK: Accounts as the CLI sees them
 
 /// One account in `openaccs status --json` and on the control socket. Remaining is what matters:
@@ -34,6 +58,8 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
     /// Native process and its current main window numbers, for computer-use tools.
     public var pid: Int32?
     public var windowIDs: [UInt32]
+    public var profilePath: String?
+    public var membership: ControlMembership?
     public var provider: Provider
     public var label: String
     public var plan: String?
@@ -61,6 +87,8 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
         id = try c.decode(UUID.self, forKey: .id)
         pid = try c.decodeIfPresent(Int32.self, forKey: .pid)
         windowIDs = try c.decodeIfPresent([UInt32].self, forKey: .windowIDs) ?? []
+        profilePath = try c.decodeIfPresent(String.self, forKey: .profilePath)
+        membership = try c.decodeIfPresent(ControlMembership.self, forKey: .membership)
         provider = try c.decode(Provider.self, forKey: .provider)
         label = try c.decode(String.self, forKey: .label)
         plan = try c.decodeIfPresent(String.self, forKey: .plan)
@@ -115,7 +143,9 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
 
     /// The best of `provider`'s working accounts (signed in, with numbers), by the same rule as the panel's ✦.
     public static func best(of provider: Provider, in accounts: [ControlAccount], now: Date = Date()) -> ControlAccount? {
-        Room.best(accounts.filter { $0.provider == provider && !$0.needsSignIn && $0.isCurrent(now: now) }.compactMap { a in a.room.map { (a, $0) } })
+        let eligible = accounts.filter { $0.provider == provider && !$0.needsSignIn && $0.isCurrent(now: now) }
+        // On equal quotas, keep the panel’s existing choice even after the user moves it.
+        return Room.best(eligible.sorted { $0.best && !$1.best }.compactMap { a in a.room.map { (a, $0) } })
     }
 
     /// False for numbers over 30 minutes old that don't say when any limit resets (the Claude app's own):
@@ -125,9 +155,9 @@ public struct ControlAccount: Codable, Sendable, Hashable, Identifiable {
         return windows.contains { $0.label == nil && $0.resetsAt != nil }
     }
 
-    /// Panel order: Claude, Codex, then Limits (Grok, Kimi, Z.ai as added). Row numbers follow it.
-    public static func inDisplayOrder(_ accounts: [ControlAccount]) -> [ControlAccount] {
-        PanelSection.allCases.flatMap { section in accounts.filter { section.includes($0.provider) } }
+    /// Row numbers follow the user's panel order.
+    public static func inDisplayOrder(_ accounts: [ControlAccount], order: PanelOrder = PanelOrder()) -> [ControlAccount] {
+        order.groups(accounts, provider: \.provider).flatMap(\.rows)
     }
 
     /// `openaccs status --json`: `{"accounts": [...]}`, sorted keys, ISO-8601 dates.
@@ -217,27 +247,6 @@ extension Provider {
     }
 }
 
-/// The panel's sections.
-enum PanelSection: CaseIterable {
-    case claude, codex, limits
-
-    var title: String {
-        switch self {
-        case .claude: "Claude"
-        case .codex: "Codex"
-        case .limits: "Limits"
-        }
-    }
-
-    func includes(_ provider: Provider) -> Bool {
-        switch self {
-        case .claude: provider == .claude
-        case .codex: provider == .codex
-        case .limits: provider != .claude && provider != .codex
-        }
-    }
-}
-
 // MARK: Finding an account by what the user typed
 
 public enum AccountMatch: Equatable, Sendable {
@@ -306,12 +315,12 @@ public struct StatusText: Sendable {
         }
         let layout = Layout(numberWidth: String(accounts.count).count,
                             titleWidth: min(36, shown.map { Self.title($0.element).count }.max() ?? 0))
-        var first = true
-        for section in PanelSection.allCases {
-            let rows = shown.filter { section.includes($0.element.provider) }
-            guard !rows.isEmpty else { continue }
-            if !first { lines.append("") }
-            first = false
+        var seen = Set<PanelSection>()
+        for (_, account) in shown {
+            let section = PanelSection(account.provider)
+            guard seen.insert(section).inserted else { continue }
+            let rows = shown.filter { PanelSection($0.element.provider) == section }
+            if seen.count > 1 { lines.append("") }
             lines.append(paint(section.title, .bold))
             for (i, account) in rows { lines += block(account, number: i + 1, layout: layout) }
         }

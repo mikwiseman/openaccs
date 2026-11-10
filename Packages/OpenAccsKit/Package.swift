@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         .target(name: "OpenAccsCore"),
         .target(name: "ClaudeKit", dependencies: ["OpenAccsCore"]),
-        .target(name: "CodexKit", dependencies: ["OpenAccsCore"]),
+        .target(name: "CodexKit", dependencies: ["OpenAccsCore", "SetupKit"]),
         .target(name: "LimitsKit", dependencies: ["OpenAccsCore"]),
         .target(name: "SetupKit", dependencies: ["OpenAccsCore"]),
         .testTarget(name: "OpenAccsCoreTests", dependencies: ["OpenAccsCore"]),

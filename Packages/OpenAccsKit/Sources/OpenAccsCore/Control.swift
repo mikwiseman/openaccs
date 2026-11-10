@@ -7,7 +7,7 @@ import Foundation
 /// Actions name accounts by id; the CLI resolves names with `AccountMatch` first.
 public struct ControlRequest: Codable, Sendable, Equatable {
     public enum Command: String, Codable, Sendable {
-        case status, refresh, open, launch, restart, connect, rename, remove, add
+        case status, refresh, open, launch, restart, connect, rename, remove, add, memberships
     }
 
     /// What `add` adds.

@@ -9,17 +9,35 @@ public struct ClaudeCLIIdentity: Sendable, Hashable {
     public var accountUuid: String?
     public var organizationUuid: String? = nil
 
-    /// Signed in to that account, and to that org when the CLI names one.
+    /// Cached identity must name both the account and organization. It is not live authorization proof.
     public func matches(_ key: ClaudeAccountKey) -> Bool {
         guard accountUuid?.lowercased() == key.account else { return false }
-        return organizationUuid.map { $0.lowercased() == key.org } ?? true
+        return organizationUuid?.lowercased() == key.org
     }
 
-    /// The same account, and the same org when both name one.
+    /// The same complete membership identity.
     func isSame(as other: ClaudeCLIIdentity) -> Bool {
         guard let account = accountUuid?.lowercased(), account == other.accountUuid?.lowercased() else { return false }
-        guard let org = organizationUuid?.lowercased(), let otherOrg = other.organizationUuid?.lowercased() else { return true }
+        guard let org = organizationUuid?.lowercased(), let otherOrg = other.organizationUuid?.lowercased() else { return false }
         return org == otherOrg
+    }
+}
+
+/// A user-run native connection step. Preparing it never starts OAuth or changes an existing sign-in.
+public struct ClaudeCLIConnectionPlan: Sendable, Identifiable {
+    public var id: UUID
+    public var email: String?
+    public var organization: String
+    public var accountUuid: String
+    public var organizationUuid: String
+    public var command: String
+    public var verificationCommand: String
+    public var cachedIdentity: ClaudeCLIIdentity?
+
+    public var hasWrongMembership: Bool {
+        guard let cachedIdentity else { return false }
+        return cachedIdentity.accountUuid?.lowercased() != accountUuid.lowercased()
+            || cachedIdentity.organizationUuid?.lowercased() != organizationUuid.lowercased()
     }
 }
 
@@ -61,6 +79,25 @@ public struct ClaudeCodeCLI: Sendable {
     /// Keychain item after this exact string, so a stored path is used verbatim forever.
     public func configDir(for signIn: UUID) -> URL {
         paths.claudeSignInsDir.appending(path: signIn.uuidString, directoryHint: .notDirectory)
+    }
+
+    public func connectionPlan(accountID: UUID, info: ClaudeAccountInfo) throws -> ClaudeCLIConnectionPlan {
+        guard let account = info.accountUuid, !account.isEmpty,
+              let org = info.organizationUuid, !org.isEmpty else {
+            throw UsageError.unexpected("Discover memberships before connecting the CLI.")
+        }
+        guard let claude = executable() else { throw ProcessError.notFound("claude") }
+        // Same stable per-row directory as the CLI adapter; never reuse the desktop config or a sibling's login.
+        let directory = paths.claudeSignInsDir.appending(path: "cli-" + accountID.uuidString)
+        let settings = try JSONSerialization.data(withJSONObject: ["forceLoginMethod": "claudeai", "forceLoginOrgUUID": org], options: [.sortedKeys])
+        let base = ["env", "CLAUDE_CONFIG_DIR=" + directory.path, claude.path, "--setting-sources", "", "--settings", String(decoding: settings, as: UTF8.self)]
+        var login = base + ["auth", "login", "--claudeai"]
+        if let email = info.email, !email.isEmpty { login += ["--email", email] }
+        return ClaudeCLIConnectionPlan(id: accountID, email: info.email, organization: info.organizationName ?? org,
+            accountUuid: account, organizationUuid: org,
+            command: "mkdir -p " + Self.quoted(directory.path) + " && " + login.map(Self.quoted).joined(separator: " "),
+            verificationCommand: (base + ["auth", "status", "--json"]).map(Self.quoted).joined(separator: " "),
+            cachedIdentity: identity(configDir: directory))
     }
 
     /// Runs Anthropic's own sign-in (`claude auth login --claudeai`) in that folder and waits up to 10 minutes.

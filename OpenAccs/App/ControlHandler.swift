@@ -48,7 +48,7 @@ final class ControlHandler {
     }
 
     private func answer(_ error: String?) -> ControlResponse {
-        ControlResponse(error: error, accounts: ControlAccount.inDisplayOrder(model.rows.map(Self.account)), notice: model.notice)
+        ControlResponse(error: error, accounts: ControlAccount.inDisplayOrder(model.rows.map(Self.account), order: model.panelOrder), notice: model.notice)
     }
 
     private func perform(_ request: ControlRequest) async throws {
@@ -60,6 +60,8 @@ final class ControlHandler {
             return
         case .refresh:
             await model.refreshNow()
+        case .memberships:
+            try await model.importClaudeMemberships(request.id)
         case .open:
             let id = try row(request.id).id
             try await toTheEnd { try await model.open(id) }
@@ -142,10 +144,13 @@ final class ControlHandler {
         case .active: .active
         case .idle: .idle
         }
-        return ControlAccount(id: row.id, provider: row.provider, label: row.label, plan: row.plan, state: state,
+        var result = ControlAccount(id: row.id, provider: row.provider, label: row.label, plan: row.plan, state: state,
                               usage: row.usage, error: row.error, needsSignIn: row.needsSignIn,
                               pendingSessions: row.pendingSessions, pendingChanges: row.pendingChanges, best: row.isBest,
                               pid: row.pid, windowIDs: windowIDs(for: row.pid))
+        result.profilePath = row.profilePath
+        result.membership = row.membership
+        return result
     }
 
     private static func windowIDs(for pid: Int32?) -> [UInt32] {

@@ -151,6 +151,10 @@ public enum FileOperation: Codable, Sendable, Hashable {
     case json(path: String, key: String, value: String, expected: String?)
     /// One user-scope Claude MCP server, changed through Claude's CLI and checked before Apply and Undo.
     case claudeMCP(name: String, value: String?, expected: String?)
+    /// One Codex chat moved into Archived chats (or back) through Codex's CLI, with the `recency_at_ms` it had when
+    /// planned. Every turn moves that, so Apply and Undo do nothing if one ran since; a chat already where it should
+    /// be is left as it is.
+    case codexChat(id: String, archive: Bool, recency: Int)
     /// Create or replace a file atomically.
     case write(path: String, contents: Data, permissions: Int = 0o600, expected: FileState)
     /// Make `path` a symbolic link to `target`.

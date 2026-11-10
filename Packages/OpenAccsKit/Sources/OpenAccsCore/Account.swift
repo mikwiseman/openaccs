@@ -44,7 +44,8 @@ public struct Account: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// A Claude account is a Claude desktop data folder ("profile"). OpenAccs never touches its login.
+/// A Claude desktop login, optionally pinned to one of its organization memberships.
+/// Several memberships may share a data folder. OpenAccs never changes its login.
 public struct ClaudeAccountInfo: Codable, Hashable, Sendable {
     /// Absolute path of the Claude data folder (`--user-data-dir`). nil = the default
     /// `~/Library/Application Support/Claude`, launched without arguments.
@@ -59,17 +60,27 @@ public struct ClaudeAccountInfo: Codable, Hashable, Sendable {
     /// it for live limits, and kept verbatim. It counts for every window whose account and org its own
     /// `.claude.json` names, so every window of an account holds the same one. nil = none stored here.
     public var cliConfigDir: String?
-    /// Last account UUID seen for this profile (from Claude's log or card folders; never config.json).
+    /// The login this record belongs to, learned from Claude's log or membership discovery.
     public var accountUuid: String?
+    /// Exact membership learned from a confirmed desktop selection or discovery. nil is unresolved.
+    public var organizationUuid: String?
+    public var organizationName: String?
+    public var email: String?
+    public var plan: String?
     /// The old config folder as it was at its last import (`TranscriptMigration.fingerprint`): unchanged
     /// means nothing new to import.
     public var importedFingerprint: String?
 
-    public init(dataDir: String? = nil, legacyConfigDir: String? = nil, cliConfigDir: String? = nil, accountUuid: String? = nil) {
+    public init(dataDir: String? = nil, legacyConfigDir: String? = nil, cliConfigDir: String? = nil, accountUuid: String? = nil,
+                organizationUuid: String? = nil, organizationName: String? = nil, email: String? = nil, plan: String? = nil) {
         self.dataDir = dataDir
         self.legacyConfigDir = legacyConfigDir
         self.cliConfigDir = cliConfigDir
         self.accountUuid = accountUuid
+        self.organizationUuid = organizationUuid
+        self.organizationName = organizationName
+        self.email = email
+        self.plan = plan
     }
 }
 

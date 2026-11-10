@@ -11,6 +11,12 @@ import SetupKit
 @MainActor @Observable
 final class AppModel: PanelModel {
     private(set) var rows: [PanelRow] = []
+    var panelOrder = PanelOrder() {
+        didSet {
+            guard !readOnly, panelOrder != oldValue, let data = try? JSON.encoder.encode(panelOrder) else { return }
+            defaults.set(data, forKey: "panelOrder")
+        }
+    }
     private(set) var menuBarUsage: UsageSnapshot?
     private(set) var isRefreshing = false
     private(set) var grokBotAccounts: [String] = []
@@ -61,6 +67,8 @@ final class AppModel: PanelModel {
 
     private var accounts: [Account] = []
     private var usage: [UUID: UsageSnapshot] = [:]
+    /// Claude measurements belong to a membership, never to whichever org a window selected later.
+    private var claudeUsage: [ClaudeAccountKey: UsageSnapshot] = [:]
     private var problems: [UUID: UsageError] = [:]
     private var runningClaude: [String: pid_t] = [:]
     private var runningCodex: [UUID: pid_t] = [:]
@@ -84,6 +92,9 @@ final class AppModel: PanelModel {
     /// Profiles (data folder paths) with an open/restart/add in flight: one at a time, never two launches.
     private var claudeBusy: Set<String> = []
     private var syncRun: Task<Void, Never>?
+    /// Recheck after native cloud saves too: an open renderer can still hold the previous layout.
+    private var sidebarDefaultsNextCheck: [ClaudeAccountKey: Date] = [:]
+    private var isSyncingClaudeSidebarDefaults = false
     /// Profiles `openClaude` is preparing; their sync may migrate them although they are "busy".
     private var openingNow: Set<UUID> = []
     /// The live Codex login the user removed from OpenAccs; not re-added until Codex signs in elsewhere.
@@ -107,6 +118,9 @@ final class AppModel: PanelModel {
         grokBot = GrokBotUsage(paths: paths)
         grokCLI = GrokCLI(paths: paths)
         lastClaude = defaults.string(forKey: "lastClaude").flatMap(UUID.init)
+        if let data = defaults.data(forKey: "panelOrder"), let order = try? JSON.decoder.decode(PanelOrder.self, from: data) {
+            panelOrder = order
+        }
         syncPins = defaults.bool(forKey: "syncPins")
         Task { await start() }
     }
@@ -184,6 +198,7 @@ final class AppModel: PanelModel {
         refreshRunning()
         if modificationDate(paths.codexAuthFile) != codexAuthDate { await adoptLiveCodex() }
         await refreshUsage(force: false)
+        await syncClaudeSidebarDefaults(Array(Set(claudeAccounts.compactMap(profile))))
     }
 
     private func observeApps() {
@@ -246,7 +261,7 @@ final class AppModel: PanelModel {
 
     private func watchCards() {
         watcher?.stop()
-        let dirs = claudeAccounts.map { claude.resolve($0.claude!).dataDir.appending(path: "claude-code-sessions", directoryHint: .isDirectory) }
+        let dirs = Array(Set(claudeAccounts.map { claude.resolve($0.claude!).dataDir.appending(path: "claude-code-sessions", directoryHint: .isDirectory) }))
         guard !dirs.isEmpty else { return }
         let watcher = FileWatcher(paths: dirs, latency: 2)
         self.watcher = watcher
@@ -272,8 +287,12 @@ final class AppModel: PanelModel {
     }
 
     private func claudeActivated(pid: pid_t) {
-        guard let path = runningClaude.first(where: { $0.value == pid })?.key ?? claude.running().first(where: { $0.pid == pid })?.dataDir.standardizedFileURL.path,
-              let account = claudeAccounts.first(where: { profile($0)?.dataDir.standardizedFileURL.path == path }) else { return }
+        guard let path = runningClaude.first(where: { $0.value == pid })?.key ?? claude.running().first(where: { $0.pid == pid })?.dataDir.standardizedFileURL.path else { return }
+        let matching = claudeAccounts.filter { profile($0)?.dataDir.standardizedFileURL.path == path }
+        guard let account = matching.first(where: { account in
+            guard let info = account.claude, let p = profile(account) else { return false }
+            return p.requestedMembershipIsSelected(info)
+        }) ?? matching.first else { return }
         lastClaude = account.id
         rebuild()
     }
@@ -322,17 +341,18 @@ final class AppModel: PanelModel {
         }
         refreshRunning()
         let shared = claudeAccounts.filter { $0.claude?.legacyConfigDir == nil }
-        let profiles = shared.compactMap(profile)
+        let profiles = Array(Set(shared.compactMap(profile)))
         let running = Set(runningClaude.keys.map { URL(filePath: $0, directoryHint: .isDirectory) })
         // Profiles still on their old config folder join history only after a restart (migration);
         // until then they only get a preview count, never writes.
         let legacy = claudeAccounts.filter { $0.claude?.legacyConfigDir != nil }.compactMap { a in profile(a).map { (a.id, $0) } }
-        let sync = self.sync, pins = syncPins
+        let sync = self.sync, pins = syncPins, claude = self.claude
         pending = await Task.detached {
             let plan = try? sync.plan(profiles: profiles, running: running, pins: pins)
             if let plan, !plan.isEmpty { _ = try? sync.apply(plan) }
             var counts: [UUID: Pending] = [:]
-            for (account, profile) in zip(shared, profiles) {
+            for account in shared {
+                guard let profile = account.claude.map(claude.resolve) else { continue }
                 counts[account.id] = Pending(new: sync.pendingCount(for: profile, among: profiles),
                                              changed: profile.cardsDir.flatMap { plan?.waiting(in: $0) } ?? 0)
             }
@@ -345,6 +365,30 @@ final class AppModel: PanelModel {
         }.value
         noteShownAccounts()
         rebuild()
+        // First authorization is discovered by the card watcher too. Keep network work out of the
+        // launch/sync critical path, and never reload or restart a window to apply a preference.
+        Task { await syncClaudeSidebarDefaults(profiles) }
+    }
+
+    private func syncClaudeSidebarDefaults(_ profiles: [ClaudeProfile]) async {
+        guard !readOnly, !isSyncingClaudeSidebarDefaults else { return }
+        isSyncingClaudeSidebarDefaults = true
+        defer { isSyncingClaudeSidebarDefaults = false }
+        for profile in profiles {
+            guard !profile.orgIsGuess,
+                  let key = ClaudeAccountKey(account: profile.accountUuid, org: profile.orgUuid),
+                  Date() >= sidebarDefaultsNextCheck[key] ?? .distantPast else { continue }
+            sidebarDefaultsNextCheck[key] = Date().addingTimeInterval(60)
+            do {
+                let result = try await claudeDesktop.chronologicalSidebar(profile: profile, account: key)
+                NSLog("OpenAccs: Claude sidebar %@/%@: %@", String(key.account.prefix(8)), String(key.org.prefix(8)), String(describing: result))
+                if result != .awaitingSidebar { sidebarDefaultsNextCheck[key] = Date().addingTimeInterval(300) }
+            } catch {
+                NSLog("OpenAccs: Claude sidebar %@/%@: %@", String(key.account.prefix(8)), String(key.org.prefix(8)), error.localizedDescription)
+                // This background preference check retries on the next sync. Keep transient
+                // failures out of the global notice reserved for account/store recovery.
+            }
+        }
     }
 
     /// Which account each profile's app shows. A profile remembers the first one it is seen with, so a
@@ -352,10 +396,15 @@ final class AppModel: PanelModel {
     private func noteShownAccounts() {
         var learned = false
         for account in claudeAccounts {
-            guard let info = account.claude, let shown = claude.loggedAccount(info) else { continue }
-            shownAccount[account.id] = shown
-            if info.accountUuid == nil, let i = accounts.firstIndex(where: { $0.id == account.id }) {
-                accounts[i].claude?.accountUuid = shown
+            guard var info = account.claude else { continue }
+            let desktop = claude.resolve(info)
+            if desktop.isConfirmed { shownAccount[account.id] = desktop.accountUuid }
+            let known = Set(accounts.filter { $0.id != account.id }.compactMap {
+                ClaudeAccountKey(account: $0.claude?.accountUuid, org: $0.claude?.organizationUuid)
+            })
+            desktop.recordIdentity(in: &info, knownMemberships: known)
+            if info != account.claude, let i = accounts.firstIndex(where: { $0.id == account.id }) {
+                accounts[i].claude = info
                 learned = true
             }
         }
@@ -364,8 +413,8 @@ final class AppModel: PanelModel {
 
     /// "Signed in as ai42@…" when a profile's app shows another account than the one it was added with.
     private func accountNote(_ account: Account) -> String? {
-        guard let expected = account.claude?.accountUuid, let shown = shownAccount[account.id], shown != expected else { return nil }
-        let other = claudeAccounts.first { $0.id != account.id && $0.claude?.accountUuid == shown }
+        guard let expected = account.claude?.accountUuid, let shown = shownAccount[account.id], shown.lowercased() != expected.lowercased() else { return nil }
+        let other = claudeAccounts.first { $0.id != account.id && $0.claude?.accountUuid?.lowercased() == shown.lowercased() }
         return other.map { "Signed in as \($0.label)" } ?? "Signed in as another account"
     }
 
@@ -421,6 +470,14 @@ final class AppModel: PanelModel {
         lastClaude = account.id
         refreshRunning()
         rebuild()
+        try requireSelectedMembership(account)
+    }
+
+    private func requireSelectedMembership(_ account: Account) throws {
+        guard let info = account.claude, info.organizationUuid != nil else { return }
+        guard let current = profile(account), current.requestedMembershipIsSelected(info) else {
+            throw AppError.selectMembership(account.label)
+        }
     }
 
     // MARK: Usage
@@ -452,6 +509,7 @@ final class AppModel: PanelModel {
         isRefreshing = true
         defer { isRefreshing = false }
         grokBotAccounts = grokBot.accounts().filter { bot in !accounts.contains { $0.grok?.botAccount == bot } }
+        noteShownAccounts()
         await readDesktopCache()
         for account in accounts {
             if let info = account.codex { runningCodex[account.id] = await codex.processID(info) }
@@ -459,14 +517,14 @@ final class AppModel: PanelModel {
         rebuild()
         var groups: [ClaudeAccountKey: [Account]] = [:]
         for account in claudeAccounts {
-            if let p = profile(account), let key = p.limitsAccount(addedAs: account.claude?.accountUuid) {
+            if let p = profile(account), let info = account.claude, let key = p.limitsAccount(addedAs: info) {
                 groups[key, default: []].append(account)
             }
         }
         if allowPrompt, !groups.isEmpty { try? await claudeDesktop.allowAccess() }
-        await withTaskGroup(of: (ids: [UUID], result: Result<UsageSnapshot, UsageError>?).self) { group in
+        await withTaskGroup(of: (ids: [UUID], key: ClaudeAccountKey?, result: Result<UsageSnapshot, UsageError>?).self) { group in
             for account in accounts where account.provider != .claude && (force || isDue(account)) {
-                group.addTask { [self] in ([account.id], await self.fetchUsage(account)) }
+                group.addTask { [self] in ([account.id], nil, await self.fetchUsage(account)) }
             }
             for (key, accounts) in groups where force || accounts.contains(where: isDue) {
                 guard let account = accounts.first, let profile = profile(account) else { continue }
@@ -476,15 +534,18 @@ final class AppModel: PanelModel {
                     do { result = .success(try await reader.usage(profile: profile, account: key)) }
                     catch let error as UsageError { result = .failure(error) }
                     catch { result = .failure(.unexpected(error.localizedDescription)) }
-                    return (accounts.map(\.id), result)
+                    return (accounts.map(\.id), key, result)
                 }
             }
-            for await (ids, result) in group {
+            for await (ids, key, result) in group {
                 guard let result else { continue }
+                if let key, case .success(let snapshot) = result { claudeUsage[key] = snapshot }
                 for id in ids {
                     lastFetch[id] = Date()
                     switch result {
-                    case .success(let snapshot): usage[id] = snapshot; problems[id] = nil
+                    case .success(let snapshot):
+                        if key == nil { usage[id] = snapshot }
+                        problems[id] = nil
                     case .failure(let error): problems[id] = error
                     }
                 }
@@ -573,7 +634,7 @@ final class AppModel: PanelModel {
         for account in claudeAccounts {
             guard let window = profile(account) else { continue }
             windows[account.id] = window
-            keys[account.id] = window.limitsAccount(addedAs: account.claude?.accountUuid)
+            keys[account.id] = account.claude.flatMap { window.limitsAccount(addedAs: $0) }
         }
         for account in accounts {
             var snapshot = usage[account.id]?.at(now)
@@ -581,6 +642,7 @@ final class AppModel: PanelModel {
             var needsSignIn = problems[account.id] == .needsSignIn
             if account.provider == .claude {
                 let key = keys[account.id]
+                snapshot = key.flatMap { claudeUsage[$0] }?.at(now)
                 let saved = key.flatMap { claudeAppUsage[$0] }.flatMap { ClaudeAppUsage.current($0, now: now) }
                 snapshot = UsageSnapshot.with(Array((key.flatMap { limitHits[$0] } ?? [:]).values), on: snapshot ?? saved, now: now)
                 error = problems[account.id].map { problem in
@@ -590,14 +652,19 @@ final class AppModel: PanelModel {
                     default: problem.localizedDescription
                     }
                 } ?? accountNote(account)
-                if key == nil { error = "Sign in inside Claude" }
+                if problems[account.id] == .membershipUnavailable { snapshot = nil }
+                if key == nil && error == nil { error = "Membership unknown · discover memberships" }
+                if error == nil, let window = windows[account.id], let info = account.claude,
+                   !window.requestedMembershipIsSelected(info) {
+                    error = window.isConfirmed ? "Desktop uses another membership" : "Desktop selection unknown"
+                }
+                if error == nil, let snapshot, now.timeIntervalSince(snapshot.asOf) > 300 { error = "Usage is stale · refresh" }
                 if snapshot == nil && error == nil { error = "Refresh to read limits" }
-                needsSignIn = key == nil
-
+                needsSignIn = problems[account.id] == .needsSignIn
             }
             var row = PanelRow(
                 id: account.id, provider: account.provider, label: account.label, color: account.color,
-                plan: Self.plan(snapshot?.plan ?? account.codex?.plan?.capitalized, label: account.label),
+                plan: Self.plan(snapshot?.plan ?? account.claude?.plan ?? account.codex?.plan?.capitalized, label: account.label),
                 state: state(of: account, window: windows[account.id], usage: snapshot),
                 usage: snapshot, error: error, needsSignIn: needsSignIn
             )
@@ -608,7 +675,19 @@ final class AppModel: PanelModel {
                 row.limitsGroup = keys[account.id]?.description
                 row.hasFolder = true
             }
-            if account.provider == .claude, let profile = windows[account.id] { row.pid = runningClaude[profile.dataDir.standardizedFileURL.path] }
+            if account.provider == .claude, let profile = windows[account.id] {
+                row.pid = runningClaude[profile.dataDir.standardizedFileURL.path]
+                row.profilePath = profile.dataDir.path
+                if let info = account.claude,
+                   let key = ClaudeAccountKey(account: info.accountUuid, org: info.organizationUuid) ?? keys[account.id] {
+                    let age = claudeUsage[key].map { now.timeIntervalSince($0.asOf) }
+                    row.membership = ControlMembership(accountUuid: key.account, organizationUuid: key.org,
+                        organizationName: info.organizationName, email: info.email,
+                        observedAccountUuid: profile.accountUuid, observedOrganizationUuid: profile.orgUuid,
+                        verified: keys[account.id] == key && age.map { (-60...300).contains($0) } == true && problems[account.id] == nil,
+                        selected: profile.requestedMembershipIsSelected(info))
+                }
+            }
             if account.provider == .codex { row.pid = runningCodex[account.id] }
             rows.append(row)
         }
@@ -616,8 +695,8 @@ final class AppModel: PanelModel {
         self.rows = rows
         let claudeRows = rows.filter { $0.provider == .claude }
         // The rings use recent measurements only; stale or missing numbers draw an unknown outline.
-        menuBarUsage = (claudeRows.first { $0.id == lastClaude } ?? claudeRows.first { $0.state == .running } ?? claudeRows.first)?
-            .usage.flatMap { $0.isCurrent(now: now) ? $0 : nil }
+        let selected = claudeRows.first { $0.id == lastClaude } ?? claudeRows.first { $0.state == .running } ?? claudeRows.first
+        menuBarUsage = selected?.membership?.verified == true ? selected?.usage : nil
     }
 
     private func state(of account: Account, window: ClaudeProfile?, usage: UsageSnapshot?) -> PanelRow.State {
@@ -634,6 +713,7 @@ final class AppModel: PanelModel {
         case nil: nil
         case .needsSignIn:
             account.provider == .kimi || account.provider == .zai ? "Key no longer works" : "Sign in again"
+        case .membershipUnavailable: "Membership no longer available"
         case .notConnected: "Not connected"
         case .noPlan: "No plan with limits"
         case .network: hasUsage ? nil : "Offline"
@@ -650,6 +730,7 @@ final class AppModel: PanelModel {
             var groups = Set<String>()
             let scored = rows.indices.filter { i in
                 rows[i].provider == provider && !rows[i].needsSignIn && rows[i].usage?.isCurrent(now: now) == true
+                    && (provider != .claude || rows[i].membership?.verified == true)
                     && rows[i].limitsGroup.map { groups.insert($0).inserted } ?? true
             }.compactMap { i in rows[i].usage?.room.map { (i, $0) } }
             guard scored.count > 1, let best = Room.best(scored) else { continue }
@@ -682,6 +763,7 @@ final class AppModel: PanelModel {
         refreshRunning()
         if let pid = runningClaude[path] {
             rebuild()
+            try requireSelectedMembership(account)
             return ControlLaunchResult(id: id, label: account.label, status: .alreadyOpen, pid: pid)
         }
         openingNow.insert(id)
@@ -692,6 +774,7 @@ final class AppModel: PanelModel {
         let pid = try await claude.open(profile(current) ?? p, activate: false)
         refreshRunning()
         rebuild()
+        try requireSelectedMembership(current)
         return ControlLaunchResult(id: id, label: current.label, status: .opened, pid: pid)
     }
 
@@ -736,6 +819,7 @@ final class AppModel: PanelModel {
 
     func refreshProcessState() async {
         refreshRunning()
+        noteShownAccounts()
         for account in accounts {
             if let info = account.codex { runningCodex[account.id] = await codex.processID(info) }
         }
@@ -778,6 +862,31 @@ final class AppModel: PanelModel {
 
     // MARK: Adding
 
+    func claudeCLIConnection(_ id: UUID) throws -> ClaudeCLIConnectionPlan {
+        guard let info = accounts.first(where: { $0.id == id })?.claude else { throw AppError.accountRemoved }
+        return try ClaudeCodeCLI(paths: paths).connectionPlan(accountID: id, info: info)
+    }
+
+    func importClaudeMemberships(_ id: UUID?) async throws {
+        guard !readOnly else { return }
+        let source: ClaudeAccountInfo
+        if let id {
+            guard let info = accounts.first(where: { $0.id == id })?.claude else { throw AppError.accountRemoved }
+            source = info
+        } else {
+            source = ClaudeAccountInfo()
+        }
+        let desktop = claude.resolve(source)
+        let memberships = try await claudeDesktop.memberships(profile: desktop)
+        guard !memberships.isEmpty else { throw UsageError.noPlan }
+        try claude.mergeMemberships(memberships, source: source, profile: desktop,
+                                    accounts: &accounts, colorCount: AccountColor.all.count)
+        save()
+        watchCards()
+        refreshRunning()
+        await refreshUsage(force: true)
+    }
+
     func addClaude(label: String) async throws {
         let id = UUID()
         let dir = try claude.makeProfileDirectory(id: id)
@@ -785,7 +894,8 @@ final class AppModel: PanelModel {
         // takes them from, else the window used last (its pins too, with pin sync). Its account's own settings follow
         // once it is signed in, at its first restart.
         let source = claudeAccounts.first { profile($0)?.isDefault == true } ?? claudeAccounts.first { $0.id == lastClaude } ?? claudeAccounts.first
-        try AppSettings.seed(dir, from: source.flatMap(profile)?.dataDir, pins: syncPins)
+        try AppSettings.seed(dir, from: source.flatMap(profile)?.dataDir, pins: syncPins,
+                             permissionMode: AppSettings.permissionDefault(in: paths))
         let account = Account(id: id, provider: .claude, label: label.isEmpty ? "Claude" : label, color: nextColor(),
                               claude: ClaudeAccountInfo(dataDir: dir.path))
         accounts.insert(account, at: (accounts.lastIndex { $0.provider == .claude }).map { $0 + 1 } ?? 0)
@@ -918,6 +1028,7 @@ struct Pending: Equatable, Sendable {
 }
 
 enum AppError: LocalizedError {
+    case selectMembership(String)
     case claudeWontQuit
     case keyRejected(String)
     case migrationFailed
@@ -926,6 +1037,7 @@ enum AppError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .selectMembership(let name): "Select \(name) in Claude’s account menu. This window is using another membership."
         case .claudeWontQuit: "Claude didn't quit. Finish or stop its running tasks and try again."
         case .keyRejected(let name): "\(name) didn't accept this key."
         case .migrationFailed: "Couldn't move this profile's history into ~/.claude, so it wasn't opened on the shared folder."

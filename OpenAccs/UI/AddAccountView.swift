@@ -55,6 +55,18 @@ struct AddAccountView: View {
     @ViewBuilder private var add: some View {
         switch provider {
         case .claude:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Already signed in to Claude?").font(.system(size: 13, weight: .medium))
+                Text("Add your Personal and Team memberships with their own limits.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Discover memberships") {
+                    start("Reading memberships…") { try await model.importClaudeMemberships(nil) }
+                }
+                .buttonStyle(.pill)
+                .disabled(waiting != nil)
+            }
+            Divider()
             field("Name", text: $label, prompt: "Work")
             hints {
                 Hint("envelope", "In the new Claude window choose **Continue with email** and type the code.")

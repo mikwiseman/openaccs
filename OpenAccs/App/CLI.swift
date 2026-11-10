@@ -73,6 +73,7 @@ private struct Command {
         case "refresh": try refresh()
         case "connect": try connect()
         case "add": try add()
+        case "memberships": try memberships()
         case "rename": try rename()
         case "remove": try remove()
         case "setup": try setup()
@@ -88,6 +89,14 @@ private struct Command {
     }
 
     // MARK: One setup
+
+    func memberships() throws {
+        try allow(["--json"])
+        let id = query.isEmpty ? nil : try resolve(query, in: App.call(ControlRequest(.status)).accounts).id
+        let result = try App.call(ControlRequest(.memberships, id: id))
+        if json { print(ControlAccount.json(result.accounts)) }
+        else { print("Added Claude memberships from the existing login.") }
+    }
 
     /// Scans and applies here, not in the app: scanning only reads, and every change checks its files first.
     func setup() throws {
@@ -293,7 +302,7 @@ private struct Command {
     }
 
     func use() throws {
-        try allow(["--yes", "--best"])
+        try allow(["--yes", "--best", "--json"])
         let accounts = try App.call(ControlRequest(.status)).accounts
         let account: ControlAccount
         if flags.contains("--best") {
@@ -302,16 +311,25 @@ private struct Command {
         } else {
             account = try resolve(query, in: accounts)
         }
+        if account.provider == .claude { Terminal.note("Opening \(account.label)…") }
+        _ = try App.call(ControlRequest(.open, id: account.id))
+        if json {
+            // Read the live target after opening: never return the pre-launch PID or resolve a row number again.
+            let current = try App.call(ControlRequest(.status)).accounts
+            guard let selected = current.first(where: { $0.id == account.id }) else {
+                throw Failure.error("That account isn't in OpenAccs anymore. Run openaccs status.")
+            }
+            if selected.provider == .claude || selected.provider == .codex, (selected.pid ?? 0) <= 0 {
+                throw Failure.error("No live process for \(selected.label) after opening it. Run openaccs status --json.")
+            }
+            return print(ControlAccount.json(selected))
+        }
         switch account.provider {
         case .claude:
-            Terminal.note("Opening \(account.label)…")
-            _ = try App.call(ControlRequest(.open, id: account.id))
             print(account.state == .open ? "Switched to \(account.label)." : "Opened \(account.label).")
         case .codex:
-            _ = try App.call(ControlRequest(.open, id: account.id))
             print("Opened Codex on \(account.label).")
         case .grok, .kimi, .zai:
-            _ = try App.call(ControlRequest(.open, id: account.id))
             print("Opened the \(account.provider.displayName) usage page.")
         }
     }
@@ -475,8 +493,9 @@ private struct Command {
 
       openaccs [status] [provider] [--json]   what's left on every account, and when it comes back
       openaccs best <provider> [--json]       the account with the most left
-      openaccs use <account> [--yes]          show or open its window · others: usage page
-      openaccs use --best <provider> [--yes]  the same, for the account with the most left
+      openaccs memberships [account] [--json] add memberships from its login (default: main Claude)
+      openaccs use <account> [--json]         show or open its window; JSON returns the selected target
+      openaccs use --best <provider> [--json] the same, for the account with the most left
       openaccs launch <account>… [--json]    open saved Claude and Codex profiles; skip those already open
       openaccs launch --all [--json]         the same, for every saved Claude and Codex profile
       openaccs restart <account>              restart a Claude profile so it loads new sessions

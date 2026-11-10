@@ -426,7 +426,15 @@ public struct CardSync: Sendable {
             windows.append(window)
         }
         guard !windows.isEmpty else { return ([], state.appSettings, [:], [:]) }
-        let result = AppSettings.agree(windows, agreed: state.appSettings, seen: state.appSettingsSeen)
+        var result = AppSettings.agree(windows, agreed: state.appSettings, seen: state.appSettingsSeen)
+        // The user chose this in Claude's native settings. Newly authorized accounts need their own
+        // desktop opt-in; the legacy global toggle loses to an empty per-account map.
+        if AppSettings.permissionDefault(in: paths) == "bypassPermissions" {
+            result["bypassPermissionsModeEnabled"] = true
+            result["bypassPermissionsOptIn"] = true
+        } else {
+            result.removeValue(forKey: "bypassPermissionsOptIn")
+        }
         var operations: [SyncOperation] = [], seen: [String: [String: String]] = [:], waiting: [String: Int] = [:]
         for window in windows {
             seen[window.key] = window.digests

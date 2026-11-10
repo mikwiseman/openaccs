@@ -1,12 +1,14 @@
 import SwiftUI
 import OpenAccsCore
+import ClaudeKit
 
 /// Everything the panel shows and does. `AppModel` implements it for real, `DemoModel` for snapshots.
 /// Async actions throw a `LocalizedError` whose description the panel shows as is.
 @MainActor
 protocol PanelModel: AnyObject, Observable {
-    /// Every account in display order. The panel groups them into Claude, Codex and Limits.
+    /// Account discovery order is the default until the user arranges the panel.
     var rows: [PanelRow] { get }
+    var panelOrder: PanelOrder { get set }
     /// Usage of the Claude account used last: the menu-bar gauge (outer arc 5h, inner arc 7d).
     var menuBarUsage: UsageSnapshot? { get }
     var isRefreshing: Bool { get }
@@ -31,6 +33,10 @@ protocol PanelModel: AnyObject, Observable {
 
     /// Launch a new Claude profile; the user signs in inside that window.
     func addClaude(label: String) async throws
+    /// Add memberships from an existing desktop login, without a new sign-in.
+    func importClaudeMemberships(_ id: UUID?) async throws
+    /// Prepare the native CLI connection step without starting OAuth.
+    func claudeCLIConnection(_ id: UUID) throws -> ClaudeCLIConnectionPlan
     /// `codex login` in the browser; returns when the account is saved.
     func addCodex() async throws
     func addGrokCLI() async throws
@@ -52,6 +58,8 @@ struct PanelRow: Identifiable, Hashable {
 
     var id: UUID
     var pid: Int32? = nil
+    var profilePath: String? = nil
+    var membership: ControlMembership? = nil
     var provider: Provider
     var label: String
     /// Index into `AccountColor.all`.

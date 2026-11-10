@@ -3,7 +3,7 @@ import AppKit
 import OpenAccsCore
 import SetupKit
 
-/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --settings | --setup]` renders the
+/// `OpenAccs --snapshot <png> [--demo] [--dark] [--add <provider> | --arrange | --settings | --setup]` renders the
 /// panel (or an add view, the Settings window or
 /// its Setup tab) at 2x to a PNG and exits, without a menu-bar item. For checking the UI without clicking. A live
 /// `--setup` scans this Mac (read only) first.
@@ -52,7 +52,7 @@ enum Snapshot {
         } else if args.contains("--settings") {
             root = AnyView(SettingsView(model: model, updater: AppUpdater.shared))
         } else {
-            root = AnyView(PanelView(model: model, adding: adding))
+            root = AnyView(PanelView(model: model, adding: adding, arranging: args.contains("--arrange")))
         }
         let host = NSHostingView(rootView: root.background(Color(nsColor: .windowBackgroundColor)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: 400),
@@ -84,6 +84,7 @@ enum Snapshot {
             NSApplication.shared.setActivationPolicy(.accessory)
             window.styleMask = [.titled, .closable]
             window.title = Paths.isOverridden ? "OpenAccs — Test profiles" : "OpenAccs — Preview"
+            window.center()
             window.orderBack(nil)
             NSApplication.shared.run()
         }

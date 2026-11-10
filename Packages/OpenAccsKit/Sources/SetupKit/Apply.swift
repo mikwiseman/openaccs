@@ -116,8 +116,11 @@ public struct SetupApplier: Sendable {
     /// Every path holds what its first operation expects (later ones on the same path expect what earlier ones leave).
     func isAsPlanned(_ operations: [FileOperation]) -> Bool {
         var seen = Set<String>()
+        var chats: [(id: String, archive: Bool, recency: Int)] = []
         for operation in operations {
             switch operation {
+            case .codexChat(let id, let archive, let recency):
+                chats.append((id, archive, recency))
             case .claudeMCP(let name, _, let expected):
                 guard claudeHolds(name, expected) else { return false }
             case .toml(let path, let table, let key, _, let expected):
@@ -135,6 +138,13 @@ public struct SetupApplier: Sendable {
                 if seen.insert(destination).inserted, FileState.of(URL(filePath: destination)) != .absent { return false }
             case .command:
                 continue
+            }
+        }
+        // All of a change's chats in one read: each one is still there, and already where it should be or untouched since.
+        if !chats.isEmpty {
+            guard let now = ImportSyncSetup.chatStates(context, ids: chats.map(\.id)) else { return false }
+            for chat in chats {
+                guard let state = now[chat.id], (state.archived != 0) == chat.archive || state.recency == chat.recency else { return false }
             }
         }
         return true
@@ -219,6 +229,16 @@ public struct SetupApplier: Sendable {
                 throw SetupError.commandFailed(argv.prefix(3).joined(separator: " "))
             }
             return [.command(argv: undo, undo: argv)]
+        case .codexChat(let id, let archive, let recency):
+            let argv = ["codex", archive ? "archive" : "unarchive", id]
+            guard context.run(argv)?.status == 0 else {
+                // Codex refuses a chat that is already there: archived or brought back by hand, nothing to undo.
+                guard let state = ImportSyncSetup.chatStates(context, ids: [id])?[id], (state.archived != 0) == archive else {
+                    throw SetupError.commandFailed(argv.prefix(2).joined(separator: " "))
+                }
+                return []
+            }
+            return [.codexChat(id: id, archive: !archive, recency: recency)]
         }
     }
 

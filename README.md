@@ -32,7 +32,8 @@ The Code tab in the Claude app lists only the sessions of the account that is si
 - Archived sessions, the permission mode, the effort, Ultracode and the model of each session are the same everywhere. The last change wins, in whichever window you make it.
 - Each window keeps its own pinned chats. To pin the same chats everywhere, turn on Settings → General → Sync pinned chats. Turning it on keeps every pin from every window.
 - The Claude app's own settings are the same in every window too: its preferences, the permission mode of each folder, how new sessions start (model, effort and fast mode) and the chat MCP servers. Change one in any window and the others take it. The first time, every window takes the default window's settings and keeps the folder modes of all of them. A new window starts with them.
-- The sidebar's layout (group by, sort, show) is the one setting OpenAccs leaves alone: Claude keeps it per account on its own servers and puts it back at every launch. Set it once in each account; every window of that account then has it.
+- Sessions use Date grouping and Last updated, descending. OpenAccs updates Claude's account-owned preference after sign-in, preserving pins and custom sections. An open window may need a reload to display a changed preference; OpenAccs never forces one.
+- A native `permissions.defaultMode` of `bypassPermissions` also enables the desktop's bypass toggle for each authorized account. New profiles receive the global toggle before launch; account-specific changes wait until the profile is closed. Model, effort and speed are unchanged by these defaults.
 - Every account you have signed in to in a window gets the same list, so signing in to another account inside one window shows the same sessions too.
 - A profile that is closed shows everything the next time it opens.
 - Clicking a running profile only shows its window. Shared session changes load at its next restart; **… → Restart Claude…** is always explicit.
@@ -54,7 +55,7 @@ Settings → Setup shows instructions, skills and tools, with one **Review setup
 - **MCP servers.** The same servers in Claude Code and Codex, translated between their formats field by field. Keys stay as `${VAR}` references; a key written into a file is never copied.
 - **Defaults.** Recommended settings for both: autonomy, keeping chats, hiding `.env` and logins from agents.
 
-Nothing changes until you review the plan and apply it. Each change goes to History with Undo, and old files go to Backups first. Logins, connectors and account skills are never copied. If ChatGPT's own Import copies Claude into Codex, the Setup tab offers to turn it off and to remove what it copied.
+Nothing changes until you review the plan and apply it. Each change goes to History with Undo, and old files go to Backups first. Logins, connectors and account skills are never copied. If ChatGPT's own Import copies Claude into Codex, the Setup tab offers to turn it off and to remove what it copied. That includes the Codex chats it makes from Claude Code sessions: they move to Archived chats in Codex, so Claude sessions stay in Claude and Codex chats in Codex. A chat you continued in Codex, or brought back after OpenAccs archived it, stays.
 
 The Instructions window edits your file, shows instruction files that people publish (with their licenses), adopts the rules you pick into your file through your own Claude Code, and has a six-question wizard for a short file of your own.
 
@@ -157,6 +158,12 @@ For maintainers, `scripts/release.sh` builds the app, signs it with a Developer 
 
 ### Add a Claude account
 
+For Personal and Team memberships of the same login, choose **Discover memberships** in the account’s menu or Add Claude. OpenAccs reads the existing desktop session and adds each membership once, with its own saved account + organization identity and limits. If the profile’s selected membership is unknown, select it in Claude first. No additional sign-in or desktop profile is created.
+
+Both rows share a window. **Other membership** means that window currently uses another membership: choose the requested membership in Claude’s account menu. Quotas stay attached to their own membership. `openaccs memberships <account> --json` performs the same discovery from a saved profile; omit the account to use the main Claude profile.
+
+**Connect CLI…** prepares a native sign-in command for that membership’s separate CLI folder. Run it yourself, then verify the native account and organization. Desktop sign-in does not authorize the CLI or a remote host.
+
 1. Click Add at the bottom of the panel and choose Claude.
 2. Type a name, e.g. "Work", and click Open Claude. OpenAccs creates a new profile and opens a new Claude window for it.
 3. In that window, choose Continue with email and type the code that Anthropic sends you.
@@ -207,8 +214,8 @@ openaccs status --json      # the same data for scripts
 | --- | --- |
 | `openaccs [status] [provider] [--json]` | What's left on every account, and when it comes back. `limits` works too. |
 | `openaccs best <provider> [--json]` | The account with the most left. |
-| `openaccs use <account> [--yes]` | Claude and Codex: show or open that profile. Others: open the usage page. `switch` and `open` work too. |
-| `openaccs use --best <provider> [--yes]` | The same, for the account with the most left. |
+| `openaccs use <account> [--json]` | Claude and Codex: show or open that profile. Others: open the usage page. JSON returns the selected account with its current PID and window IDs. `switch` and `open` work too. |
+| `openaccs use --best <provider> [--json]` | The same, for the account with the most left. |
 | `openaccs launch <account>… [--json]` or `openaccs launch --all [--json]` | Open selected or all saved Claude and Codex profiles. Running profiles are skipped, even with pending changes. Quote names containing spaces. |
 | `openaccs restart <account>` | Restart a Claude profile so it loads new sessions. |
 | `openaccs refresh [--json]` | Ask every provider now, then show the status. |
@@ -221,6 +228,8 @@ An `<account>` is a name or a unique part of it, `provider:name`, or the number 
 `launch --json` returns a `results` array with each profile's `id`, `label`, `status` (`opened`, `already_open` or `failed`), and `pid` or `error`. Repeated or concurrent commands keep one process per profile. The whole selection is checked before launch; one launch failure doesn't stop the remaining profiles.
 
 ### Manage accounts
+
+Click **Arrange** in the panel to drag whole sections or move accounts within a section. You can also select a row and press **⌥↑** or **⌥↓**. OpenAccs remembers the order, and the CLI uses the same row numbers.
 
 Open an account's **…** menu to rename it, change its color or remove it. Removal asks you to confirm the named account. Removing Claude leaves its profile and shared history on disk. Its menu also offers Show Data Folder and Restart Claude.
 
@@ -328,4 +337,8 @@ OpenAccs is released under the [MIT license](LICENSE). Copyright 2026 Mik Wisema
 
 ### Choosing windows from an agent
 
-`openaccs status --json` maps each saved account ID and label to its current `pid` and `windowIDs`. Use those identifiers with computer-use tools; titles and application names can be identical. `openaccs launch <account> --json` opens a missing profile and returns the existing PID when it is already open. Re-read status after an app update or restart because native identifiers change.
+`openaccs use <account> --json` selects the account and returns that account alone, including its current `pid` and `windowIDs`. It reads these after opening the profile and fails if the account disappeared or its app has no live process. `openaccs status --json` lists these targets for every saved account. `openaccs launch <account> --json` opens a missing profile in the background and returns the existing PID when it is already open.
+
+Target the returned PID or window ID in the computer-use tool. Claude profiles share one application name and bundle ID, so a tool that selects only `Claude` or `com.anthropic.claudefordesktop` can attach to a different account even after `use` succeeds. Use a controller that accepts an exact process or window. Re-read status after an app update or restart because native identifiers change. This selects the desktop profile, not the standalone Claude CLI sign-in.
+
+To regression-test selection without opening real profiles, run `python3 scripts/test-cli-selection.py /path/to/Debug/OpenAccs.app/Contents/MacOS/OpenAccs`. It uses an isolated control socket and rejects Release builds before issuing an open request.

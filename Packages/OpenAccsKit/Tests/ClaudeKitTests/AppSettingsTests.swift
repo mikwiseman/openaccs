@@ -196,6 +196,59 @@ private func sync(_ home: TempHome, _ windows: [ClaudeProfile], running: [Claude
 }
 
 @Suite struct AppSettingsTests {
+    @Test func anOrdinaryPermissionDefaultNeverCopiesAccountOptIns() throws {
+        let home = try TempHome()
+        try home.write(".claude/settings.json", #"{"permissions":{"defaultMode":"default"}}"#)
+        let main = home.window("main", account: mainAccount, isDefault: true)
+        let fresh = home.window("fresh", account: otherAccount)
+        for (profile, optedIn) in [(main, true), (fresh, false)] {
+            try home.save(profile, Settings())
+            var config = home.json(at: home.configFile(profile))
+            var preferences = config["preferences"] as! [String: Any]
+            preferences["bypassPermissionsOptInByAccount"] = [profile.accountUuid!: optedIn]
+            config["preferences"] = preferences
+            try JSONSerialization.data(withJSONObject: config).write(to: home.configFile(profile))
+        }
+        try sync(home, [main, fresh])
+        let preferences = home.json(at: home.configFile(fresh))["preferences"] as? [String: Any]
+        #expect(preferences?["bypassPermissionsOptInByAccount"] as? [String: Bool] == [otherAccount: false])
+    }
+
+    @Test func bypassDefaultReachesANewlyAuthorizedAccountWithoutChangingItsSessionDefaults() throws {
+        let home = try TempHome()
+        try home.write(".claude/settings.json", #"{"permissions":{"defaultMode":"bypassPermissions"},"effortLevel":"max"}"#)
+        let unsigned = home.url.appending(path: "Windows/unsigned/Data")
+        try AppSettings.seed(unsigned, pins: false, permissionMode: AppSettings.permissionDefault(in: home.paths))
+        let seeded = home.json(at: unsigned.appending(path: "claude_desktop_config.json"))
+        #expect((seeded["preferences"] as? [String: Any])?["bypassPermissionsModeEnabled"] as? Bool == true)
+        #expect((seeded["preferences"] as? [String: Any])?["bypassPermissionsOptInByAccount"] == nil)
+        let fresh = home.window("fresh", account: otherAccount)
+        try home.save(fresh, Settings())
+        var original = home.json(at: home.configFile(fresh))
+        var preferences = original["preferences"] as! [String: Any]
+        // Claude creates this map during first sign-in; it takes precedence over the legacy toggle.
+        preferences["bypassPermissionsOptInByAccount"] = [mainAccount: false]
+        original["preferences"] = preferences
+        try JSONSerialization.data(withJSONObject: original).write(to: home.configFile(fresh))
+        let presets = try Data(contentsOf: fresh.dataDir.appending(path: "ccd-session-presets.json"))
+
+        // Signing in never restarts a running agent or writes over the app's in-memory preferences.
+        let before = try Data(contentsOf: home.configFile(fresh))
+        let waiting = try sync(home, [fresh], running: [fresh]).0
+        #expect(waiting.waiting(in: fresh.cardsDir!) > 0)
+        #expect(try Data(contentsOf: home.configFile(fresh)) == before)
+
+        try sync(home, [fresh])
+        let after = home.json(at: home.configFile(fresh))
+        let optIns = (after["preferences"] as? [String: Any])?["bypassPermissionsOptInByAccount"] as? [String: Bool]
+        #expect(optIns?[otherAccount] == true)
+        #expect(optIns?[mainAccount] == false)
+        #expect(try Data(contentsOf: fresh.dataDir.appending(path: "ccd-session-presets.json")) == presets)
+        #expect(home.prefs(fresh)["fastMode"] as? Bool == false)
+        #expect(home.prefs(fresh)["starred-local-code-sessions"] as? [String] == ["local_\(otherAccount)"])
+        #expect(try sync(home, [fresh]).0.operations.isEmpty)
+    }
+
     @Test func menuBarDefaultsToHiddenAndKeepsAnExplicitChoice() throws {
         let home = try TempHome()
         let main = home.window("main", account: mainAccount, isDefault: true)

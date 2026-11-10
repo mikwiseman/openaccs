@@ -36,6 +36,17 @@ import Testing
         #expect(try box.vault("bob") == rotated)
     }
 
+    @Test func reopeningASignedOutWindowLetsTheNativeAppRenewItsLogin() async throws {
+        let box = try Sandbox()
+        try box.park(Fake.auth("bob"), as: "bob")
+        let home = box.accounts.profileHome(Fake.info("bob"))
+        let pid = try await box.accounts.open(Fake.info("bob"), activate: false)
+        try FileManager.default.removeItem(at: home.appending(path: "auth.json"))
+        #expect(try await box.accounts.open(Fake.info("bob"), activate: false) == pid)
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "auth.json").path))
+        #expect(box.app.profileLaunches == [home.path])
+    }
+
     @Test func profilesShareSetupButKeepTheirOwnAuth() async throws {
         let box = try Sandbox()
         let config = box.paths.codexHome.appending(path: "config.toml")
@@ -45,6 +56,41 @@ import Testing
         let home = box.accounts.profileHome(Fake.info("bob"))
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: home.appending(path: "config.toml").path) == config.path)
         #expect(CodexAuthFile.identity(of: try Data(contentsOf: home.appending(path: "auth.json"))) == Fake.info("bob"))
+    }
+
+    @Test func existingAndNewProfilesSeeTheLocalPluginSetup() async throws {
+        let box = try Sandbox()
+        let source = box.paths.codexHome
+        let fm = FileManager.default
+        try box.park(Fake.auth("bob"), as: "bob")
+        try box.park(Fake.auth("ana"), as: "ana")
+        _ = try await box.accounts.open(Fake.info("bob"), activate: false)
+        let config = """
+        model = "example"
+        [marketplaces.studio]
+        source_type = "local"
+        source = "/example"
+        [plugins."design@studio"]
+        enabled = true
+        """
+        try Data(config.utf8).write(to: source.appending(path: "config.toml"))
+        for name in ["rules", "agents", "plugins/cache/studio/design/1/skills", "plugins/cache/private-team/private/1"] {
+            try fm.createDirectory(at: source.appending(path: name), withIntermediateDirectories: true)
+        }
+        try Data("[]".utf8).write(to: source.appending(path: "keybindings.json"))
+        let index = ".tmp/bundled-marketplaces/default/.agents/plugins/marketplace.json"
+        try fm.createDirectory(at: source.appending(path: index).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: source.appending(path: index))
+        for user in ["bob", "ana"] {
+            _ = try await box.accounts.open(Fake.info(user), activate: false)
+            let home = box.accounts.profileHome(Fake.info(user))
+            for name in ["config.toml", "rules", "agents", "keybindings.json", "plugins/cache/studio/design/1/skills"] {
+                #expect(home.appending(path: name).resolvingSymlinksInPath().path == source.appending(path: name).resolvingSymlinksInPath().path)
+            }
+            #expect(try Data(contentsOf: home.appending(path: index)) == Data("{}".utf8))
+            #expect(!fm.fileExists(atPath: home.appending(path: "plugins/cache/private-team").path))
+            #expect(try Data(contentsOf: home.appending(path: "auth.json")) == Fake.auth(user))
+        }
     }
 
     @Test func profilesShareHistoryAndWriterLocksWithoutSharingTheLogin() async throws {

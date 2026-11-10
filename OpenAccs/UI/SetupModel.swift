@@ -97,8 +97,11 @@ extension SetupModel {
                    changes: [SetupChange(id: "mcp.claude.playwright", area: .mcp, title: "Use Claude's playwright", operations: [], waitsFor: .chatGPT),
                              SetupChange(id: "mcp.codex.playwright", area: .mcp, title: "Use Codex's playwright", operations: [])]),
         AreaReport(area: .defaults, summary: "2 of 4 recommended · Autonomy mixed"),
-        AreaReport(area: .importSync, summary: "Keep imports in sync is on · 34 copied skills",
+        AreaReport(area: .importSync, summary: "Keep imports in sync is on · 34 copied skills · 246 copied chats",
                    attention: [Attention(id: "s1", text: "ChatGPT Import still copies Claude into Codex", fixes: ["import.off"])],
-                   changes: [SetupChange(id: "import.off", area: .importSync, title: "Turn off ChatGPT's Keep imports in sync", operations: [], waitsFor: .chatGPT)]),
+                   changes: [SetupChange(id: "import.off", area: .importSync, title: "Turn off ChatGPT's Keep imports in sync", operations: [], waitsFor: .chatGPT),
+                             SetupChange(id: "import.chats", area: .importSync, title: "Archive 246 chats ChatGPT Import copied into Codex",
+                                         detail: "They move to Archived chats in Codex, where each one can be restored. The sessions they were copied from stay where they are. 10 that Codex continued stay.",
+                                         operations: [], waitsFor: .chatGPT, requires: ["import.off"])]),
     ]
 }

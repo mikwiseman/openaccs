@@ -6,6 +6,20 @@ import Testing
 // MARK: Socket server and client
 
 @Suite(.serialized) struct ControlSocketTests {
+    @Test func membershipTargetRoundTripsWithoutAssumingSelection() throws {
+        var account = ControlAccount(id: UUID(), provider: .claude, label: "WaiWai Team", state: .open, pid: 123)
+        account.profilePath = "/profiles/shared"
+        account.membership = ControlMembership(accountUuid: "account", organizationUuid: "team",
+            organizationName: "WaiWai Team", email: "me@example.com", observedAccountUuid: "account",
+            observedOrganizationUuid: "personal", verified: true, selected: false)
+        let json = ControlAccount.json([account])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let result = try decoder.decode(ControlResponse.self, from: Data(json.utf8)).accounts[0]
+        #expect(result.membership == account.membership)
+        #expect(result.membership?.selected == false)
+        #expect(result.profilePath == "/profiles/shared")
+    }
     /// Deliberately long (over sun_path's 104 bytes): a long home folder must still work.
     let dir = FileManager.default.temporaryDirectory
         .appending(path: "openaccs-control-\(UUID().uuidString)/a-folder-name-long-enough-to-push-the-socket-path-past-sun-path")
@@ -304,6 +318,46 @@ private final class Flag: @unchecked Sendable {
         let zai = ControlAccount(id: UUID(), provider: .zai, label: "Z.ai", state: .idle)
         let mixed = [kimi, codexMe, zai, claudeWork, codexTeam, claudeMe]
         #expect(ControlAccount.inDisplayOrder(mixed).map(\.label) == ["Work Max", "me@example.com", "me@example.com", "team@example.com", "Kimi", "Z.ai"])
+    }
+
+    @Test func savedPanelOrderSurvivesRefreshAndChangingAccounts() throws {
+        let zai = ControlAccount(id: UUID(), provider: .zai, label: "Z.ai", state: .idle)
+        let grok = ControlAccount(id: UUID(), provider: .grok, label: "Grok", state: .idle)
+        let mixed = [kimi, codexMe, zai, claudeWork, codexTeam, claudeMe]
+        var order = PanelOrder()
+        order.moveSection(.limits, before: .claude)
+        order.moveAccount(kimi.id, before: nil, in: .limits, siblings: [kimi.id, zai.id])
+        order.moveAccount(codexTeam.id, before: codexMe.id, in: .codex, siblings: [codexMe.id, codexTeam.id])
+        let saved = try JSON.decoder.decode(PanelOrder.self, from: JSON.encoder.encode(order))
+        let ordered = ControlAccount.inDisplayOrder(mixed, order: saved)
+        #expect(ordered.map(\.id) == [zai.id, kimi.id, claudeWork.id, claudeMe.id, codexTeam.id, codexMe.id])
+        let status = StatusText(color: false).render(ordered)
+        #expect(status.hasPrefix("Limits\n1 "))
+        #expect(status.contains("\nCodex\n5 "))
+        let changed = [grok, claudeMe, kimi, zai, codexMe]
+        #expect(ControlAccount.inDisplayOrder(changed, order: saved).map(\.id) == [zai.id, kimi.id, grok.id, claudeMe.id, codexMe.id])
+    }
+
+    @Test func movingOntoSelfOrOutsideTheSectionDoesNothing() {
+        var order = PanelOrder()
+        let initial = order
+        let siblings = [claudeMe.id, claudeWork.id]
+        order.moveAccount(claudeMe.id, before: claudeMe.id, in: .claude, siblings: siblings)
+        order.moveAccount(claudeMe.id, before: codexMe.id, in: .claude, siblings: siblings)
+        order.moveAccount(codexMe.id, before: claudeMe.id, in: .claude, siblings: siblings)
+        #expect(order == initial)
+    }
+
+    @Test func rearrangingEqualAccountsKeepsThePanelsBestChoice() {
+        var starred = codexMe
+        starred.best = true
+        var other = starred
+        other.id = UUID()
+        other.best = false
+        let usage = UsageSnapshot(windows: [UsageWindow(kind: .weekly, usedPercent: 20)], asOf: Date(), source: "test")
+        starred.windows = usage.windows.map(ControlAccount.Window.init)
+        other.windows = starred.windows
+        #expect(ControlAccount.best(of: .codex, in: [other, starred])?.id == starred.id)
     }
 
     @Test func providerNames() {

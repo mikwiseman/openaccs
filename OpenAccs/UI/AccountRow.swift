@@ -1,5 +1,6 @@
 import SwiftUI
 import OpenAccsCore
+import ClaudeKit
 
 /// One account: who, how much is left, when it comes back. Click opens or switches.
 struct AccountRow: View {
@@ -20,13 +21,22 @@ struct AccountRow: View {
     @State private var task: Task<Void, Never>?
     @State private var failure: String?
     @State private var pulse = 0
+    @State private var cliConnection: ClaudeCLIConnectionPlan?
     @FocusState private var nameFocused: Bool
 
     enum Confirm { case restartClaude, remove }
 
     private var color: Color { AccountColor.color(row.color) }
     private var meters: [UsageWindow] { UsageText.meters(row.usage) }
-    private var staleNote: String? { row.usage.flatMap { UsageText.stale($0.asOf, now: now) } }
+    private var staleNote: String? {
+        guard let usage = row.usage else { return nil }
+        if row.provider == .claude, now.timeIntervalSince(usage.asOf) > 300 { return "Usage is stale" }
+        return UsageText.stale(usage.asOf, now: now)
+    }
+    private var usageIsUncertain: Bool {
+        staleNote != nil || (row.provider == .claude &&
+            (row.membership?.verified == false || now.timeIntervalSince(row.usage?.asOf ?? .distantPast) > 300))
+    }
 
     /// Meters and captions start under the label, not under the dot.
     static let indent: CGFloat = 18
@@ -40,7 +50,7 @@ struct AccountRow: View {
                 }
                 .padding(.leading, Self.indent)
                 // Old numbers fade, so nobody picks an account on a guess.
-                .opacity(staleNote == nil ? 1 : 0.5)
+                .opacity(usageIsUncertain ? 0.5 : 1)
                 .allowsHitTesting(false)
             }
             caption.padding(.leading, Self.indent)
@@ -62,6 +72,9 @@ struct AccountRow: View {
         }
         .onHover { hovering = $0 }
         .contextMenu { menu }
+        .sheet(item: $cliConnection) { plan in
+            ClaudeCLIConnectionView(plan: plan, membershipName: row.label)
+        }
         .onChange(of: row.state) { old, new in if old == .idle && new != .idle { pulse += 1 } }
         .onChange(of: row.usage?.asOf) { _, _ in pulse += 1 }
         .onChange(of: confirm) { _, new in if new != nil { reveal() } }
@@ -148,7 +161,9 @@ struct AccountRow: View {
 
     private var status: String? {
         switch row.provider {
-        case .claude: row.state == .running ? "Open" : "Closed"
+        case .claude:
+            if row.membership?.selected == false { "Other membership" }
+            else { row.state == .running ? "Open" : "Closed" }
         case .codex: row.state == .idle ? "Closed" : "Open"
         case .grok, .kimi, .zai: nil
         }
@@ -187,7 +202,7 @@ struct AccountRow: View {
                     }
                     Text(notes).foregroundStyle(.secondary).allowsHitTesting(false)
                 }
-                .captionStyle()
+                .captionStyle(lines: 2)
             }
         }
     }
@@ -220,7 +235,8 @@ struct AccountRow: View {
         if let c = usage.credits { parts.append(UsageText.credits(c)) }
         if usage.source == "Claude app" {
             parts.append(UsageText.updated(usage.asOf, now: now))
-        } else if let staleNote { parts.append(staleNote) }
+        }
+        if let staleNote, row.error?.hasPrefix(staleNote) != true { parts.append(staleNote) }
         return parts.joined(separator: "  ·  ")
     }
 
@@ -277,6 +293,15 @@ struct AccountRow: View {
 
     @ViewBuilder private var menu: some View {
         Button(row.provider == .claude ? (row.state == .running ? "Show window" : "Open Claude") : row.provider == .codex ? "Open Codex" : "View usage", action: tap)
+        if row.provider == .claude {
+            Button("Discover memberships") {
+                run("Reading memberships…") { try await model.importClaudeMemberships(row.id) }
+            }
+            Button("Connect CLI…") {
+                do { cliConnection = try model.claudeCLIConnection(row.id) }
+                catch { failure = error.localizedDescription }
+            }
+        }
         if row.provider == .claude && row.state == .running {
             if let waiting = ControlAccount.pendingText(new: row.pendingSessions, changed: row.pendingChanges) {
                 Text("\(waiting) waiting for restart")
@@ -309,7 +334,15 @@ struct AccountRow: View {
         failure = nil
         switch row.provider {
         case .claude:
-            run(row.state == .running ? "Showing Claude…" : "Opening Claude…") { try await model.open(row.id) }
+            run(row.state == .running ? "Showing Claude…" : "Opening Claude…") {
+                do {
+                    try await model.open(row.id)
+                } catch AppError.selectMembership(_) {
+                    // The window opened. Its current membership is already shown in the row;
+                    // choosing another membership is a native Claude action, not an open failure.
+                    // CLI callers still receive the error and cannot mistake this for a switch.
+                }
+            }
         default:
             run("Opening…") { try await model.open(row.id) }
         }

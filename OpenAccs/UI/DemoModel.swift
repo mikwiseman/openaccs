@@ -1,11 +1,13 @@
 import SwiftUI
 import OpenAccsCore
+import ClaudeKit
 
 /// Realistic stand-in data for snapshots and UI work. Actions only pretend.
 /// `OPENACCS_DEMO=empty` starts with no accounts; `OPENACCS_DEMO=long` adds every edge case.
 @MainActor @Observable
 final class DemoModel: PanelModel {
     var rows: [PanelRow]
+    var panelOrder = PanelOrder()
     var isRefreshing = false
     var notice: String?
     var launchAtLogin = true
@@ -81,6 +83,16 @@ final class DemoModel: PanelModel {
         switch ProcessInfo.processInfo.environment["OPENACCS_DEMO"] {
         case "empty":
             rows = []
+        case "memberships":
+            rows = Array(rows.prefix(2))
+            rows[0].label = "Personal Max"
+            rows[1].label = "WaiWai Team"
+            for i in rows.indices {
+                rows[i].membership = ControlMembership(accountUuid: "11111111-1111-4111-8111-111111111111",
+                    organizationUuid: i == 0 ? "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" : "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                    organizationName: rows[i].label, email: "me@example.com", verified: true, selected: i == 0)
+            }
+            rows[1].error = "Desktop uses another membership"
         case "long":
             notice = "accounts.json could not be read. Showing what OpenAccs found on this Mac."
             rows.insert(contentsOf: [
@@ -156,6 +168,9 @@ final class DemoModel: PanelModel {
             rows[i].state = .running
         } else if rows[i].provider == .claude {
             rows[i].state = .running
+            if rows[i].membership?.selected == false {
+                throw AppError.selectMembership(rows[i].label)
+            }
         }
     }
 
@@ -178,6 +193,16 @@ final class DemoModel: PanelModel {
     }
 
     func quit() { NSApplication.shared.terminate(nil) }
+
+    func importClaudeMemberships(_ id: UUID?) async throws { }
+
+    func claudeCLIConnection(_ id: UUID) throws -> ClaudeCLIConnectionPlan {
+        let member = rows.first { $0.id == id }?.membership
+        return try ClaudeCodeCLI(paths: .current).connectionPlan(accountID: id,
+            info: ClaudeAccountInfo(accountUuid: member?.accountUuid ?? "11111111-1111-4111-8111-111111111111",
+                organizationUuid: member?.organizationUuid ?? "22222222-2222-4222-8222-222222222222",
+                organizationName: member?.organizationName ?? "Personal Max", email: member?.email ?? "me@example.com"))
+    }
 
     func addClaude(label: String) async throws {
         try await Task.sleep(for: .seconds(1))

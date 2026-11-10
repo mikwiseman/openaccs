@@ -2,9 +2,10 @@ import Foundation
 
 /// ChatGPT Import: the ChatGPT app's "Import from Claude Code" with "Keep imports in sync" copies Claude's setup into
 /// Codex one way. It changes "Claude" to "Codex" inside what it copies, brings along Cursor's built-in skills and
-/// Claude's account skills, and never updates what it copied. One setup shares Claude and Codex instead, so this area
-/// offers to turn Import's sync off and to remove the skill folders Import copied into ~/.agents/skills.
-/// ~/AGENTS.md, which Import also writes, is left to Instructions.
+/// Claude's account skills, and never updates what it copied. It also turns Claude Code sessions into Codex chats.
+/// One setup shares Claude and Codex instead, and sessions stay with the app that made them, so this area offers to
+/// turn Import's sync off, to remove the skill folders Import copied into ~/.agents/skills, and to archive the chats
+/// it made. ~/AGENTS.md, which Import also writes, is left to Instructions.
 public enum ImportSyncSetup {
     public static func scan(_ context: SetupContext) -> AreaReport {
         let configFile = context.url(".codex/config.toml").resolvingSymlinksInPath()
@@ -64,9 +65,40 @@ public enum ImportSyncSetup {
             }
         }
 
-        let left = copies.isEmpty ? "nothing left over" : copies.count == 1 ? "1 copied skill" : "\(copies.count) copied skills"
-        // Without the ledger there is nothing to say about what is left over.
-        let summary = ([isOn ? "Keep imports in sync is on" : "Off"] + (ledger == nil ? [] : [left])).joined(separator: " · ")
+        // Chats Import made from Claude sessions, in every project. One Codex has continued is Codex's now, and one
+        // OpenAccs archived that is back in the list was brought back on purpose: both stay.
+        let chats: [Chat]? = ledger?.contains { $0.itemType == "SESSIONS" } == true ? self.chats(context) : []
+        let archivedBefore = Set(SetupApplier(context: context).history().flatMap(\.undo).compactMap { operation -> String? in
+            guard case .codexChat(let id, false, _) = operation else { return nil }
+            return id
+        })
+        let continued = (chats ?? []).filter { $0.continued != 0 }.count
+        let broughtBack = (chats ?? []).filter { $0.continued == 0 && archivedBefore.contains($0.id) }.count
+        let copied = (chats ?? []).filter { $0.continued == 0 && !archivedBefore.contains($0.id) }
+        if !copied.isEmpty {
+            let one = copied.count == 1, kept = continued + broughtBack
+            let why = broughtBack == 0 ? "Codex continued" : continued == 0 ? "you brought back" : "Codex continued or you brought back"
+            changes.append(SetupChange(
+                id: "importSync.archive-chats", area: .importSync,
+                title: one ? "Archive 1 chat ChatGPT Import copied into Codex" : "Archive \(copied.count) chats ChatGPT Import copied into Codex",
+                detail: (one ? "It moves to Archived chats in Codex, where it can be restored. The session it was copied from stays where it is."
+                             : "They move to Archived chats in Codex, where each one can be restored. The sessions they were copied from stay where they are.")
+                    + (kept == 0 ? "" : " \(kept) that \(why) \(kept == 1 ? "stays" : "stay")."),
+                operations: copied.map { .codexChat(id: $0.id, archive: true, recency: $0.recency) },
+                waitsFor: .chatGPT,
+                requires: isOn ? ["importSync.turn-off"] : []))
+        }
+        if let chats, !chats.isEmpty {
+            items.append(SetupItem(id: "importSync.chats", name: "Chats", claude: .notShared, codex: .same,
+                                   note: "\(chats.count) still in Codex's list" + (continued == 0 ? "" : "; Codex continued \(continued)")
+                                       + (broughtBack == 0 ? "" : "; you brought back \(broughtBack)")))
+        }
+
+        let left = [(copies.count, "copied skill"), (copied.count, "copied chat")].filter { $0.0 > 0 }
+            .map { $0.0 == 1 ? "1 \($0.1)" : "\($0.0) \($0.1)s" }
+        // Without the ledger, or the chats it lists, there is nothing to say about what is left over.
+        let summary = ([isOn ? "Keep imports in sync is on" : "Off"]
+            + (ledger == nil || chats == nil ? [] : [left.isEmpty ? "nothing left over" : left.joined(separator: " · ")])).joined(separator: " · ")
         return AreaReport(area: .importSync, summary: summary, attention: attention, changes: changes, items: items)
     }
 
@@ -84,23 +116,64 @@ public enum ImportSyncSetup {
     }
 
     /// Every success in Import's ledger, `successes` being a JSON array of {item_type, cwd, source, target, title}.
+    /// A session's `target` is the id of the Codex chat Import made from it.
     static let query = "SELECT i.provider_id, json_extract(s.value, '$.item_type') AS item_type, json_extract(s.value, '$.cwd') AS cwd, "
         + "json_extract(s.value, '$.source') AS source, json_extract(s.value, '$.target') AS target "
         + "FROM external_agent_config_imports AS i, json_each(i.successes) AS s "
-        + "WHERE json_valid(i.successes) AND item_type IN ('SKILLS', 'COMMANDS', 'MCP_SERVER_CONFIG', 'PLUGINS') ORDER BY i.completed_at_ms"
+        + "WHERE json_valid(i.successes) AND item_type IN ('SKILLS', 'COMMANDS', 'MCP_SERVER_CONFIG', 'PLUGINS', 'SESSIONS') ORDER BY i.completed_at_ms"
 
-    /// Import's ledger in ~/.codex/state_5.sqlite, opened read-only; nil when sqlite3, the database or the table is missing.
-    /// Opened as immutable: while ChatGPT runs, a plain read-only open of its database fails ("unable to open").
-    /// The ledger only grows, so a read that misses the newest writes is fine.
-    static func ledger(_ context: SetupContext) -> [Row]? {
-        let database = context.url(".codex/state_5.sqlite").absoluteString + "?immutable=1"
-        guard let result = context.run(["sqlite3", "-readonly", "-json", database, query]),
-              result.status == 0 else { return nil }
-        // sqlite3 prints nothing at all for no rows.
-        if result.output.allSatisfy(\.isWhitespace) { return [] }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try? decoder.decode([Row].self, from: Data(result.output.utf8))
+    /// A chat Import made from a session that is still in Codex's list (not archived), with its `recency_at_ms`.
+    /// `continued` is 1 when Codex ran a turn in it after Import last wrote it: only a turn moves recency, and Import
+    /// dates the chat by the session it copied, so a later turn moves it past that import.
+    struct Chat: Decodable, Hashable {
+        var id: String
+        var recency: Int
+        var continued: Int
+    }
+
+    /// The chats Import made from sessions, newest first.
+    static let chatsQuery = "SELECT t.id, t.recency_at_ms AS recency, t.recency_at_ms > c.imported_at_ms AS continued FROM threads AS t JOIN ("
+        + "SELECT json_extract(s.value, '$.target') AS id, MAX(i.completed_at_ms) AS imported_at_ms "
+        + "FROM external_agent_config_imports AS i, json_each(i.successes) AS s "
+        + "WHERE json_valid(i.successes) AND json_extract(s.value, '$.item_type') = 'SESSIONS' GROUP BY 1"
+        + ") AS c ON c.id = t.id WHERE t.archived = 0 ORDER BY t.recency_at_ms DESC, t.id"
+
+    /// Where a chat is now: `archived` 1 or 0, and its `recency_at_ms`.
+    struct ChatState: Decodable, Hashable {
+        var id: String
+        var archived: Int
+        var recency: Int
+    }
+
+    /// Import's ledger; nil when sqlite3, the database or the table is missing.
+    static func ledger(_ context: SetupContext) -> [Row]? { rows(query, context) }
+
+    /// The chats Import made that are still in Codex's list; nil when they can't be read.
+    static func chats(_ context: SetupContext) -> [Chat]? { rows(chatsQuery, context) }
+
+    /// These chats as Codex's database has them now, by id (a deleted one is missing); nil when it can't be read.
+    static func chatStates(_ context: SetupContext, ids: [String]) -> [String: ChatState]? {
+        // Codex's chat ids are UUIDs: an id with any other character never reaches the query.
+        guard ids.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) else { return nil }
+        let list = ids.map { "'\($0)'" }.joined(separator: ", ")
+        let states: [ChatState]? = rows("SELECT id, archived, recency_at_ms AS recency FROM threads WHERE id IN (\(list))", context)
+        return states.map { Dictionary($0.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
+    }
+
+    /// Rows from ~/.codex/state_5.sqlite, opened read-only. A plain open sees every write, also those still in the
+    /// write-ahead log, but it fails while the log's files (-wal, -shm) are absent, since a read-only open can't make
+    /// them; then every write is in the file itself, and an immutable open reads it.
+    static func rows<T: Decodable>(_ query: String, _ context: SetupContext) -> [T]? {
+        let file = context.url(".codex/state_5.sqlite")
+        for database in [file.path, file.absoluteString + "?immutable=1"] {
+            guard let result = context.run(["sqlite3", "-readonly", "-json", database, query]), result.status == 0 else { continue }
+            // sqlite3 prints nothing at all for no rows.
+            if result.output.allSatisfy(\.isWhitespace) { return [] }
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try? decoder.decode([T].self, from: Data(result.output.utf8))
+        }
+        return nil
     }
 
     /// Why a copied folder should go, as the detail shows it.

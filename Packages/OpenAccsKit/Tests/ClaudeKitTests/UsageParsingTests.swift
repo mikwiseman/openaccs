@@ -194,8 +194,8 @@ private func iso(_ string: String) -> Date {
         // The first folder signed in to an account serves it, whichever window stored it; an unfinished
         // sign-in or a folder that's gone serves nobody.
         #expect(cli.signIns([missing, d2, d1, d3, d4], for: [ao, bo, co]) == [ao: d1, bo: d3])
-        // A CLI that names no organization counts for its account in any of them.
-        #expect(cli.signIns([d5], for: [ao, ap]) == [ao: d5, ap: d5])
+        // A cached login with no organization cannot authorize both Personal and Team.
+        #expect(cli.signIns([d5], for: [ao, ap]).isEmpty)
         #expect(cli.signIns([], for: [ao]).isEmpty)
         // A folder Claude Code says is signed out gives way to another folder of its account, and serves only alone.
         #expect(cli.signIns([d1, d4], for: [ao], signedOut: [d1]) == [ao: d4])
@@ -217,6 +217,44 @@ private func iso(_ string: String) -> Date {
         // account's old folder; never another account's windows, another org, or a window of unknown account.
         #expect(cli.sharing(who, among: windows) == [w[0], w[1], w[2]])
         #expect(who.matches(ao) && !who.matches(ap) && !who.matches(bo))
+    }
+
+    @Test func connectionPlansKeepPersonalAndTeamSeparateAndDoNotStartLogin() throws {
+        let home = try TempHome()
+        try executable(home, ".local/bin/claude")
+        let cli = ClaudeCodeCLI(paths: home.paths)
+        let personalID = UUID(), teamID = UUID()
+        let personal = try cli.connectionPlan(accountID: personalID,
+            info: ClaudeAccountInfo(cliConfigDir: "/existing/active/login", accountUuid: a,
+                organizationUuid: o, organizationName: "Personal Max", email: "same@example.com"))
+        let team = try cli.connectionPlan(accountID: teamID,
+            info: ClaudeAccountInfo(cliConfigDir: "/existing/active/login", accountUuid: a,
+                organizationUuid: p, organizationName: "WaiWai Team", email: "same@example.com"))
+        #expect(personal.command.contains("cli-" + personalID.uuidString))
+        #expect(team.command.contains("cli-" + teamID.uuidString))
+        #expect(!team.command.contains("cli-" + personalID.uuidString))
+        #expect(!personal.command.contains("/existing/active/login"))
+        #expect(personal.command.contains("forceLoginOrgUUID"))
+        #expect(personal.verificationCommand.contains("'auth' 'status' '--json'"))
+        #expect(personal.cachedIdentity == nil)
+        #expect(!FileManager.default.fileExists(atPath: home.paths.claudeSignInsDir.path))
+        #expect(throws: UsageError.self) {
+            try cli.connectionPlan(accountID: UUID(), info: ClaudeAccountInfo(accountUuid: a))
+        }
+    }
+
+    @Test func connectionPlanReportsWrongCachedMembershipWithoutChangingIt() throws {
+        let home = try TempHome()
+        try executable(home, ".local/bin/claude")
+        let id = UUID(), cli = ClaudeCodeCLI(paths: home.paths)
+        let dir = try signedIn(home, "cli-" + id.uuidString, ["accountUuid": a, "organizationUuid": p])
+        let before = cli.identity(configDir: URL(filePath: dir))
+        let plan = try cli.connectionPlan(accountID: id, info: ClaudeAccountInfo(accountUuid: a, organizationUuid: o))
+        #expect(plan.hasWrongMembership)
+        #expect(plan.cachedIdentity == before)
+        #expect(cli.identity(configDir: URL(filePath: dir)) == before)
+        let incomplete = ClaudeCLIIdentity(accountUuid: a)
+        #expect(!incomplete.isSame(as: before!))
     }
 
     @Test func privateWindowsOfTheDefaultBrowser() {

@@ -8,9 +8,9 @@ import OpenAccsCore
 /// (consents, pins, window state). The Code tab keeps its own in localStorage and copies them into those files:
 /// `preferences.epitaxyPrefs.<key>` is a copy of `LSS-persisted.<key>`, the new-session defaults come from
 /// `persisted.ccd-session-presets.<account>`. At launch it reads localStorage, and a copy only while that has
-/// none, so a change goes into both. Not here: the composer's fast mode and permission mode (the app sets them
-/// from the new-session defaults at launch), and the sidebar's layout (`dframe-store`), which Claude syncs per
-/// account through its own servers and puts back at every launch.
+/// none, so a change goes into both. The composer reads permission mode from Claude Code's native settings;
+/// presets do not hold it. Sidebar grouping lives in Claude's account-owned `dframe-store` and is updated
+/// separately by `ClaudeSidebarSettings`, never by copying another account's layout.
 ///
 /// Agreed setting by setting, and entry by entry for a map (a folder's mode, an MCP server), against the last
 /// sync: a window holding something else than it held then changed it, and the newest change wins (by its file's
@@ -72,13 +72,14 @@ public enum AppSettings {
         }
     }
 
-    /// The shared settings. None is a consent, opt-in, gate, seen, nudge, ack, intro, onboarding or count flag:
-    /// OpenAccs never agrees to anything on the user's behalf. Pins have a sync of their own.
+    /// The shared settings. Bypass opt-in follows only an explicit native user-level bypass default
+    /// (CardSync); other consents, gates and onboarding flags stay with the account. Pins sync separately.
     static let settings: [Setting] = [
         "bypassPermissionsModeEnabled", "allowAllBrowserActions", "chicagoEnabled", "ccRemoteControlDefaultEnabled",
         "dispatchCodeTasksPermissionMode", "menuBarEnabled", "dockBounceEnabled", "ccdScheduledTasksEnabled", "sidebarMode",
         "coworkBrowserToolsEnabled", "coworkPreferredBrowser", "coworkWebSearchEnabled", "coworkScheduledTasksEnabled",
     ].map { Setting(name: $0, place: ["preferences", $0]) } + [
+        Setting(name: "bypassPermissionsOptIn", place: ["preferences", "bypassPermissionsOptInByAccount", "{account}"]),
         Setting(name: "folderModes", place: ["preferences", "epitaxyPrefs", "epitaxy-folder-permission-mode-v2.{account}"], kind: .map),
         Setting(name: "mcpServers", place: ["mcpServers"], kind: .map),
         Setting(name: "newSession", file: .presets, place: ["byAccount", "{account}", "builtIns", "local", "settings"], made: 2,
@@ -304,9 +305,16 @@ public enum AppSettings {
 
     // MARK: New windows
 
+    /// The native user-level permission default, shared by every managed desktop profile.
+    /// A requested bypass default also needs the desktop's account-specific opt-in after sign-in.
+    public static func permissionDefault(in paths: Paths) -> String? {
+        guard let object = document(paths.claudeSharedConfigDir.appending(path: "settings.json"))?.object else { return nil }
+        return (object["permissions"] as? [String: Any])?["defaultMode"] as? String
+    }
+
     /// Writes a brand-new window's config before its first launch, with the shared settings of `source` (a
     /// window's data folder) that belong to no account, and its pins when they are shared. Never replaces a file.
-    public static func seed(_ dataDir: URL, from source: URL? = nil, pins: Bool = true) throws {
+    public static func seed(_ dataDir: URL, from source: URL? = nil, pins: Bool = true, permissionMode: String? = nil) throws {
         let object = source.flatMap { document($0.appending(path: "claude_desktop_config.json"))?.object } ?? [:]
         // Hidden by default; an explicit shared choice in Claude's System settings still wins.
         var seeded: [String: Any] = ["preferences": ["menuBarEnabled": false]]
@@ -316,6 +324,9 @@ public enum AppSettings {
             + (pins ? [["preferences", "epitaxyPrefs", PinList.starredKey]] : [])
         for place in places {
             if let value = value(at: place, in: object) { seeded = setting(place[...], to: value, in: seeded) }
+        }
+        if permissionMode == "bypassPermissions" {
+            seeded = setting(["preferences", "bypassPermissionsModeEnabled"][...], to: true, in: seeded)
         }
         guard !seeded.isEmpty, let data = serialize(seeded) else { return }
         try AtomicFile.createExclusively(data, at: dataDir.appending(path: "claude_desktop_config.json"))

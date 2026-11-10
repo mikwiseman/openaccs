@@ -5,15 +5,18 @@ import OpenAccsCore
 struct PanelView: View {
     let model: any PanelModel
     @State private var adding: Provider?
+    @State private var arranging = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "general"
     @State private var listHeight: CGFloat = 0
     /// Which ends of the scrolling list have more beyond them, to fade those edges.
     @State private var overflow: Edge.Set = []
 
-    init(model: any PanelModel, adding: Provider? = nil) {
+    init(model: any PanelModel, adding: Provider? = nil, arranging: Bool = false) {
         self.model = model
         _adding = State(initialValue: adding)
+        _arranging = State(initialValue: arranging)
     }
 
     static let width: CGFloat = 340
@@ -22,7 +25,10 @@ struct PanelView: View {
 
     var body: some View {
         Group {
-            if let provider = adding {
+            if arranging {
+                ArrangeAccountsView(model: model) { arranging = false }
+                    .transition(.opacity)
+            } else if let provider = adding {
                 AddAccountView(provider: provider, model: model) { adding = nil }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
@@ -30,7 +36,8 @@ struct PanelView: View {
             }
         }
         .frame(width: Self.width)
-        .animation(.snappy(duration: 0.3), value: adding)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: adding)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: arranging)
     }
 
     private var list: some View {
@@ -67,8 +74,7 @@ struct PanelView: View {
     }
 
     private func accounts(now: Date, proxy: ScrollViewProxy) -> some View {
-        let sections = Section.allCases.map { s in (s, model.rows.filter { s.includes($0.provider) }) }
-            .filter { !$0.1.isEmpty }
+        let sections = model.panelOrder.groups(model.rows, provider: \.provider)
         return VStack(alignment: .leading, spacing: 2) {
             if let notice = model.notice {
                 Label {
@@ -140,6 +146,14 @@ struct PanelView: View {
                 .buttonStyle(.glass)
                 .fixedSize()
                 Spacer()
+                if model.rows.count > 1 {
+                    Button { arranging = true } label: {
+                        Label("Arrange", systemImage: "arrow.up.arrow.down")
+                    }
+                    .buttonStyle(.quiet)
+                    .fixedSize()
+                    .help("Reorder accounts and sections")
+                }
                 Button { model.refresh() } label: {
                     Image(systemName: "arrow.trianglehead.2.clockwise")
                         .font(.system(size: 11, weight: .medium))
@@ -178,25 +192,5 @@ struct PanelView: View {
         settingsTab = tab
         NSApp.activate()
         openSettings()
-    }
-
-    enum Section: CaseIterable {
-        case claude, codex, limits
-
-        var title: String {
-            switch self {
-            case .claude: "Claude"
-            case .codex: "Codex"
-            case .limits: "Limits"
-            }
-        }
-
-        func includes(_ provider: Provider) -> Bool {
-            switch self {
-            case .claude: provider == .claude
-            case .codex: provider == .codex
-            case .limits: provider != .claude && provider != .codex
-            }
-        }
     }
 }

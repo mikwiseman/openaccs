@@ -14,7 +14,7 @@ import Testing
 
     @Test func verifiesTheAccountBeforeFetchingItsExactOrganization() async throws {
         let http = StubHTTPClient()
-        http.on("https://claude.ai/api/account", .init(json: #"{"uuid":"account-a"}"#))
+        http.on("https://claude.ai/api/account", .init(json: #"{"uuid":"account-a","memberships":[{"organization":{"uuid":"org-a"}}]}"#))
         http.on("https://claude.ai/api/organizations/org-a/usage", .init(json: #"{"five_hour":{"utilization":12,"resets_at":"2026-11-01T12:00:00Z"},"seven_day":{"utilization":37}}"#))
         let reader = ClaudeDesktopUsage(http: http)
         let key = ClaudeAccountKey(account: "account-a", org: "org-a")!
@@ -30,9 +30,32 @@ import Testing
         let http = StubHTTPClient()
         http.on("https://claude.ai/api/account", .init(json: #"{"uuid":"account-b"}"#))
         let reader = ClaudeDesktopUsage(http: http)
-        await #expect(throws: UsageError.needsSignIn) {
+        await #expect(throws: UsageError.unexpected("Claude is signed in to another account")) {
             try await reader.fetch(session: "sk-ant-test", account: ClaudeAccountKey(account: "account-a", org: "org-a")!)
         }
         #expect(http.requests.count == 1)
+    }
+
+    @Test func expiredLoginAndRevokedMembershipHaveDifferentActions() async throws {
+        let expired = StubHTTPClient()
+        expired.on("https://claude.ai/api/account", .init(status: 401, json: "{}"))
+        let key = ClaudeAccountKey(account: "account-a", org: "org-a")!
+        await #expect(throws: UsageError.needsSignIn) {
+            try await ClaudeDesktopUsage(http: expired).fetch(session: "sk-ant-test", account: key)
+        }
+        let revoked = StubHTTPClient()
+        revoked.on("https://claude.ai/api/account", .init(json: #"{"uuid":"account-a","memberships":[{"organization":{"uuid":"org-a"}}]}"#))
+        revoked.on("https://claude.ai/api/organizations/org-a/usage", .init(status: 403, json: "{}"))
+        await #expect(throws: UsageError.membershipUnavailable) {
+            try await ClaudeDesktopUsage(http: revoked).fetch(session: "sk-ant-test", account: key)
+        }
+    }
+
+    @Test func failedRefreshDoesNotMasqueradeAsSignedOut() async throws {
+        let http = StubHTTPClient()
+        http.on("https://claude.ai/api/account", .init(status: 503, json: "{}"))
+        await #expect(throws: UsageError.unexpected("Claude could not refresh limits (HTTP 503)")) {
+            try await ClaudeDesktopUsage(http: http).fetch(session: "sk-ant-test", account: ClaudeAccountKey(account: "account-a", org: "org-a")!)
+        }
     }
 }

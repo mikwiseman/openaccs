@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import OpenAccsCore
+import SetupKit
 
 /// Codex sign-ins. Each account has a Keychain vault slot and may own a desktop profile's auth.json.
 /// The original app and terminal keep ~/.codex/auth.json. Only parked vault copies are refreshed by
@@ -66,29 +67,16 @@ public actor CodexAccounts {
             guard found?.isSameLogin(as: info) == true else { throw CodexError.verifyFailed(found: found?.email) }
             let data = try Data(contentsOf: file)
             if try secrets.read(info.vaultKey) != data { try secrets.write(data, for: info.vaultKey) }
-        } else {
-            guard app.processID(home: home) == nil else { throw CodexError.unsavedSignIn }
+        } else if app.processID(home: home) == nil {
+            // A running signed-out window owns its login flow. Seed only a closed profile.
             guard let data = try secrets.read(info.vaultKey), CodexAuthFile.identity(of: data)?.isSameLogin(as: info) == true else {
                 throw CodexError.noSavedSignIn
             }
-            let sharedConfig = paths.codexHome.appending(path: "config.toml")
-            let config = try? String(contentsOf: sharedConfig, encoding: .utf8)
             try preflight()
             try fm.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try AtomicFile.write(data, to: file, permissions: 0o600)
-            // Share authored setup; credentials and browser data belong to this account.
-            for name in ["AGENTS.md", "skills"] {
-                let source = paths.codexHome.appending(path: name), destination = home.appending(path: name)
-                if fm.fileExists(atPath: source.path), !fm.fileExists(atPath: destination.path) {
-                    try fm.createSymbolicLink(at: destination, withDestinationURL: source)
-                }
-            }
-            if config != nil {
-                try fm.createSymbolicLink(at: home.appending(path: "config.toml"), withDestinationURL: sharedConfig)
-            } else {
-                try AtomicFile.write(Data("cli_auth_credentials_store = \"file\"\n".utf8), to: home.appending(path: "config.toml"), permissions: 0o600)
-            }
         }
+        try prepareSetup(in: home)
         if app.processID(home: home) != nil { return try await app.open(home: home, activate: activate) }
         // Native SQLite state is shared through CODEX_SQLITE_HOME. Share its supporting files
         // and writer locks as directories, never symlink individual SQLite/WAL files.
@@ -101,6 +89,74 @@ public actor CodexAccounts {
         }
         try prepareProjectSidebar(in: home)
         return try await app.open(home: home, activate: activate)
+    }
+
+    /// Settings and locally installed plugin packages follow the primary profile. Hosted installs,
+    /// provider grants, sign-ins and plugin runtime state are owned by each native account.
+    private func prepareSetup(in home: URL) throws {
+        let source = paths.codexHome
+        let config = source.appending(path: "config.toml")
+        if !FileManager.default.fileExists(atPath: config.path) {
+            try AtomicFile.createExclusively(Data("cli_auth_credentials_store = \"file\"\n".utf8), at: config)
+        }
+        try preflight()
+        for name in ["config.toml", "AGENTS.md", "skills", "agents", "rules", "hooks.json", "keybindings.json"] {
+            try share(name, from: source, in: home)
+        }
+
+        // Codex discovers these built-in catalogs under CODEX_HOME even when the package cache
+        // is populated. Seed them once, then let each native updater own its checkout and locks.
+        let fm = FileManager.default
+        for name in [".tmp/bundled-marketplaces", ".tmp/plugins", ".tmp/plugins.sha"] {
+            let catalog = source.appending(path: name), destination = home.appending(path: name)
+            guard fm.fileExists(atPath: catalog.path), !fm.fileExists(atPath: destination.path) else { continue }
+            let parent = destination.deletingLastPathComponent()
+            try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+            let staged = parent.appending(path: ".openaccs-catalog-\(UUID().uuidString)")
+            defer { try? fm.removeItem(at: staged) }
+            try fm.copyItem(at: catalog, to: staged)
+            do { try fm.moveItem(at: staged, to: destination) }
+            catch let error as CocoaError where error.code == .fileWriteFileExists { continue }
+        }
+
+        let toml = TOMLFile(text: try String(contentsOf: config, encoding: .utf8))
+        var markets = Set((toml?.value("marketplaces", in: [])?.table ?? [:]).keys)
+        // The personal and legacy curated marketplaces are discovered from their manifests.
+        for manifest in [paths.home.appending(path: ".agents/plugins/marketplace.json"),
+                         source.appending(path: ".tmp/plugins/.agents/plugins/marketplace.json")] {
+            if let data = try? Data(contentsOf: manifest), let name = JSON.object(data)?["name"] as? String {
+                markets.insert(name)
+            }
+        }
+        for market in markets where !market.isEmpty && !market.hasPrefix(".") && !market.contains("/") {
+            try share("plugins/cache/\(market)", from: source, in: home)
+        }
+    }
+
+    /// Preserve previous profile settings outside the shared tree and restore them if linking fails.
+    private func share(_ name: String, from source: URL, in home: URL) throws {
+        let fm = FileManager.default
+        let canonical = source.appending(path: name), local = home.appending(path: name)
+        guard fm.fileExists(atPath: canonical.path) else { return }
+        if (try? fm.destinationOfSymbolicLink(atPath: local.path)) == canonical.path { return }
+        let parent = local.deletingLastPathComponent()
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let staged = parent.appending(path: ".openaccs-link-\(UUID().uuidString)")
+        try fm.createSymbolicLink(at: staged, withDestinationURL: canonical)
+        defer { try? fm.removeItem(at: staged) }
+        let exists = fm.fileExists(atPath: local.path) || (try? fm.destinationOfSymbolicLink(atPath: local.path)) != nil
+        if exists {
+            let backup = home.deletingLastPathComponent().appending(path: "Setup Backups/\(UUID().uuidString)/\(name)")
+            try fm.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try fm.moveItem(at: local, to: backup)
+            do { try fm.moveItem(at: staged, to: local) }
+            catch {
+                try fm.moveItem(at: backup, to: local)
+                throw error
+            }
+        } else {
+            try fm.moveItem(at: staged, to: local)
+        }
     }
 
     /// The desktop still caches project folders outside SQLite. Seed a new sidebar once;

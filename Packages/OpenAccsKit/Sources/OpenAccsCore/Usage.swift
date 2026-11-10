@@ -77,6 +77,8 @@ public struct UsageSnapshot: Codable, Hashable, Sendable {
 public enum UsageError: Error, Equatable, Sendable, LocalizedError {
     /// The credential is gone or permanently rejected; the user must sign in again.
     case needsSignIn
+    /// This login no longer has the requested organization membership.
+    case membershipUnavailable
     /// Nothing configured for this account yet (no key, no login).
     case notConnected
     /// The provider said this account has no plan with limits.
@@ -87,6 +89,7 @@ public enum UsageError: Error, Equatable, Sendable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .needsSignIn: "Sign in again"
+        case .membershipUnavailable: "Membership no longer available"
         case .notConnected: "Not connected"
         case .noPlan: "No plan"
         case .network(let m): "Network: \(m)"
