@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>OpenAccs</title>
         <item>
+            <title>0.5.1</title>
+            <pubDate>Tue, 10 Nov 2026 10:25:15 +0300</pubDate>
+            <link>https://github.com/mikwiseman/openaccs</link>
+            <sparkle:version>0.5.1</sparkle:version>
+            <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Arrange your accounts
+
+- Choose **Arrange** to drag whole sections or move accounts within a section. You can also select a row and press **⌥↑** or **⌥↓**. The order is saved and the CLI uses the same row numbers.
+- Discover Claude Personal and Team memberships from an existing desktop sign-in. Each membership shows its own limits. **Connect CLI** prepares a separate sign-in for that membership.
+- Claude sessions are grouped by date and sorted by last update. Profiles also honor an existing default permission-bypass setting.
+- In Setup, you can review and archive unused Claude chats imported into Codex. Chats you continued or restored stay in place.
+]]></description>
+            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.5.1/OpenAccs-0.5.1.zip" length="5654431" type="application/octet-stream" sparkle:edSignature="D6/HORAmeJhjMzDV32v459trLJynqlX/qjhdj4LYhW8lzLrCHsi5yyvjxIx3hVImCAoC0DMvYvIvgHSesKTpCA=="/>
+        </item>
+        <item>
             <title>0.5.0</title>
             <pubDate>Fri, 30 Oct 2026 10:21:02 +0300</pubDate>
             <link>https://github.com/mikwiseman/openaccs</link>
@@ -40,28 +56,9 @@ Claude limits may ask once for access to Claude Safe Storage in macOS Keychain. 
 ]]></description>
             <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.5/OpenAccs-0.4.5.zip" length="5274272" type="application/octet-stream" sparkle:edSignature="A8OjyhRkr7luVwW06JGQsGkRZTaaiXQAqsZzRN1ci0Yx7lVLdIbhyMnYeQPsc4r9CnKYAZMxFgAKMAcKVUFAAA=="/>
         </item>
-        <item>
-            <title>0.4.4</title>
-            <pubDate>Wed, 28 Oct 2026 15:04:38 +0300</pubDate>
-            <link>https://github.com/mikwiseman/openaccs</link>
-            <sparkle:version>0.4.4</sparkle:version>
-            <sparkle:shortVersionString>0.4.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[Claude limits are now live, with one sign-in per account.
-
-- Claude limits now come from Claude Code every 5 minutes: what's left of the 5-hour and weekly limits, when each resets, and your plan.
-- OpenAccs no longer shows the numbers the Claude app saves, because the app saves them only now and then, so they could be many hours old. A Claude row without live limits says so and has one Connect link.
-- Connect once per account. Every window of that account gets live limits from that one sign-in, including windows you add later.
-- Connect names the windows of the account and opens Anthropic's sign-in in a private window of your browser (Chrome, Brave, Edge or Firefox). Other browsers open it normally, with Copy link. Close other private windows first, because private windows share one sign-in.
-- OpenAccs checks that you signed in with that account and organization, and refuses any other.
-- The ✦ now marks every window of the account with the most left.
-- An open window's waiting count now reads "4 changes" instead of "4 chats changed", because it also counts pinned chats and app settings.
-]]></description>
-            <enclosure url="https://github.com/mikwiseman/openaccs/releases/download/v0.4.4/OpenAccs-0.4.4.zip" length="5191456" type="application/octet-stream" sparkle:edSignature="mL3MFO9bZXEMuRXGkBx2DDF/t9gXB1hpG/UvKuFsDVO1NuubHAMWoUmeyqW1+rXZPHmj7KkRfaTrr3GzWLJwDA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: k6bub4FjHsQ9evu0TrtUBOE8YykutegsOrKNHHZZyvBYKtUVFIYDhtEI1n568j7U7aWEc1gPQWyP2HE+w4UoCA==
-length: 4945
+edSignature: G9pmUAobmPYunf1kwTf8F8r+4zPNemlOv2J0elRqOMpGyi8cn96MtTg9cGh7SbABHkBmV5QXeS0Qa8Lun8asCA==
+length: 4507
 -->
